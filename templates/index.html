@@ -1,0 +1,1502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RunTrack — running form lab</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, 'Segoe UI', sans-serif; background:#0f1318; color:#e8edf2;
+         margin:0; padding:16px 20px 28px; max-width:2300px; margin-left:auto; margin-right:auto; }
+  h1 { font-size:20px; margin:0 0 2px; }
+  h2 { font-size:13px; margin:0 0 10px; color:#9fd3ff; text-transform:uppercase;
+       letter-spacing:.06em; }
+  .muted { color:#8a97a5; font-size:12.5px; }
+  .bar { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:10px; }
+  .pill { background:#1a2129; border:1px solid #2a3441; border-radius:20px;
+          padding:3px 12px; font-size:12px; }
+  .pill.ok { border-color:#2f6b3f; color:#9fe3b0; }
+  .pill.warn { border-color:#6b5a2f; color:#ffd479; }
+  .card { background:#151b22; border:1px solid #232c36; border-radius:10px;
+          padding:14px; margin-bottom:14px; }
+  label { display:block; font-size:12px; color:#9aa7b4; margin:8px 0 3px; }
+  input, select { width:100%; background:#0f1318; color:#e8edf2; border:1px solid #2a3441;
+          border-radius:6px; padding:7px 9px; font-size:13.5px; }
+  .row { display:flex; gap:8px; }
+  .row > div { flex:1; }
+  button { background:#2563eb; border:0; color:#fff; border-radius:6px; padding:9px 14px;
+           cursor:pointer; font-size:13.5px; }
+  button:hover { filter:brightness(1.12); }
+  button.ghost { background:#1a2129; border:1px solid #2a3441; }
+  button.danger { background:#b91c1c; }
+  button.big { width:100%; padding:12px; font-size:15px; margin-top:12px; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.active { background:#0e7490; border:1px solid #22d3ee; }
+  #feed { width:100%; max-height:64vh; object-fit:contain; background:#0a0d10;
+          border-radius:8px; border:1px solid #232c36; }
+  .feedwrap { position:relative; }
+  #feed2 { width:100%; max-height:30vh; object-fit:contain; background:#0a0d10;
+           border-radius:8px; border:1px solid #232c36; }
+  .countdown { position:absolute; top:10px; right:14px; font-size:38px; font-weight:700;
+        color:#ffd93d; text-shadow:0 2px 8px #000; display:none; }
+  .metrics { display:grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+             gap:7px; margin-top:10px; }
+  .m { background:#12181f; border:1px solid #232c36; border-radius:8px; padding:7px 9px; }
+  .m .k { font-size:10px; color:#8a97a5; text-transform:uppercase; letter-spacing:.05em; }
+  .m .v { font-size:15.5px; margin-top:2px; }
+  .m.na .v { color:#c9a227; font-size:11.5px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #232c36; }
+  th { color:#9fd3ff; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; }
+  a { color:#7ab8ff; text-decoration:none; }
+  .ok { color:#4ade80; } .bad { color:#f87171; } .warn { color:#fbbf24; }
+  .banner { border-radius:8px; padding:9px 12px; margin:8px 0; font-size:13px; display:none; }
+  .banner.err { background:#3b1212; border:1px solid #7f1d1d; color:#fca5a5; display:block; }
+  .banner.info { background:#0e2233; border:1px solid #1e4976; color:#bae6fd; display:block; }
+  .planeRow { display:flex; gap:6px; margin-top:4px; }
+  .planeRow button { flex:1; padding:8px 6px; font-size:12.5px; }
+  .playbar { display:none; margin-top:10px; background:#12181f; border:1px solid #232c36;
+             border-radius:8px; padding:10px; }
+  .playbar.on { display:block; }
+  .playrow { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .playrow button { padding:6px 10px; font-size:12.5px; }
+  input[type=range] { width:100%; padding:0; }
+  .audiobar { background:#101a14; border:1px solid #24512f; border-radius:10px; padding:12px; }
+  .audiobar.off { border-color:#3a3a3a; }
+  .bpm { font-size:30px; font-weight:700; color:#4ade80; line-height:1.05; }
+  .badge { padding:2px 9px; border-radius:12px; font-size:11.5px; border:1px solid currentColor;
+           white-space:nowrap; }
+  .histsel { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
+  .histsel > div { min-width:150px; }
+  .split { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  @media (max-width: 1100px) { .split { grid-template-columns: 1fr; } }
+
+  /* tabs */
+  .tabs { display:flex; gap:8px; margin:4px 0 14px; }
+  .tab { background:#131a21; border:1px solid #232c36; border-radius:8px 8px 0 0;
+         padding:9px 18px; font-size:13.5px; color:#9aa7b4; }
+  .tab.active { background:#1b2632; border-color:#2f4a63; color:#e8edf2; }
+
+  /* wide live layout: setup | live view | numbers + charts */
+  .livegrid { display:grid; gap:14px; align-items:start;
+              grid-template-columns: 350px minmax(520px, 1fr) 400px;
+              grid-template-areas: "left mid right"; }
+  .colleft { grid-area:left; } .colmid { grid-area:mid; } .colright { grid-area:right; }
+  @media (max-width: 1750px) {
+    .livegrid { grid-template-columns: 350px 1fr;
+                grid-template-areas: "left mid" "right right"; }
+  }
+  @media (max-width: 1050px) {
+    .livegrid { grid-template-columns: 1fr; grid-template-areas: "left" "mid" "right"; }
+  }
+
+  /* big live numbers */
+  .bignums { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .bn { background:#111820; border:1px solid #232c36; border-radius:10px; padding:10px 12px; }
+  .bn .k { font-size:10.5px; color:#8a97a5; text-transform:uppercase; letter-spacing:.05em; }
+  .bn .v { font-size:30px; font-weight:700; line-height:1.15; margin-top:2px; }
+  .bn .u { font-size:11px; color:#8a97a5; }
+  .bn.wide { grid-column: span 2; }
+
+  /* charts */
+  .chart { margin-top:10px; }
+  .chart .ct { font-size:11.5px; color:#9aa7b4; display:flex; justify-content:space-between; gap:8px; }
+  .chart canvas { width:100%; height:120px; display:block; background:#0e141a;
+                  border:1px solid #232c36; border-radius:8px; }
+  .datagrid { max-width:1500px; }
+  #startErr { color:#fca5a5; font-size:12.5px; margin-top:6px; }
+
+  /* live AI chat */
+  .chatmsg { margin:0 0 8px; border-left:2px solid #2a3441; padding-left:8px; }
+  .chatmsg .who { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#8a97a5; }
+  .chatmsg .txt { white-space:pre-wrap; }
+  .chatmsg.user { border-color:#2563eb; }
+  .chatmsg.user .who { color:#9fd3ff; }
+  .chatmsg.assistant { border-color:#0e7490; }
+  .chatmsg.sys { border-color:#6b5a2f; }
+  .chatmsg.sys .txt { color:#ffd479; }
+</style>
+</head>
+<body>
+<h1>RunTrack — biomechanics lab (running · cycling)</h1>
+<div class="bar">
+  <span class="muted">live joint tracking · slow-motion video review · local only</span>
+  <span class="pill" id="statusPill">no camera</span>
+  <span class="pill" id="fpsPill">– fps</span>
+  <span class="pill" id="discPill">discipline: running</span>
+  <span class="pill" id="planePill">view: sagittal</span>
+  <span class="pill" id="trackPill">sides: –</span>
+  <span class="pill" id="cadLivePill">cadence: –</span>
+  <span class="pill" id="cam2Pill" style="display:none">cam2: –</span>
+</div>
+<div id="banner" class="banner"></div>
+
+<div class="tabs">
+  <button class="tab active" id="tabLive" onclick="showTab('live')">● Live session</button>
+  <button class="tab" id="tabData" onclick="showTab('data')">🗂 Patients &amp; results</button>
+</div>
+
+<!-- ================================ LIVE ================================ -->
+<div id="viewLive" class="tabview">
+  <div class="livegrid">
+
+    <!-- ---------------- left: setup ---------------- -->
+    <div class="colleft">
+      <div class="card">
+        <h2>Patient &amp; session</h2>
+        <label>Name *</label><input id="pname" placeholder="e.g. Jasmel A.">
+        <label>Phone *</label><input id="pphone" placeholder="e.g. 786-000-0000">
+        <div class="row">
+          <div><label>Weight (kg)</label><input id="pweight" type="number" step="0.1" placeholder="70"></div>
+          <div><label>Height (cm)</label><input id="pheight" type="number" step="0.5" placeholder="175"></div>
+        </div>
+        <div class="row">
+          <div><label>Treadmill speed / trial speed (km/h)</label><input id="pspeed" type="number" step="0.1" placeholder="10"/></div>
+          <div><label>Session duration (s)</label><input id="pdur" type="number" value="{{ default_duration }}" min="5" max="900"></div>
+        </div>
+        <label>Discipline *</label>
+        <div class="planeRow">
+          <button class="ghost" id="btnRun" onclick="setDiscipline('running')">🏃 Running</button>
+          <button class="ghost" id="btnCyc" onclick="setDiscipline('cycling')">🚴 Cycling</button>
+        </div>
+        <div id="bikeBox" style="display:none">
+          <label>Bike type * (sets the fit targets)</label>
+          <div class="planeRow">
+            {% for bt in bike_types %}<button class="ghost" id="btnBt-{{ bt }}" onclick="setBikeType('{{ bt }}')">{{ bt|upper }}</button>{% endfor %}
+          </div>
+          <div class="row">
+            <div><label>Assumed Cd (aero watts estimate)</label><input id="pcd" type="number" step="0.05" value="0.80"></div>
+            <div><label>Saddle height (cm, optional)</label><input id="psaddle" type="number" step="0.5" placeholder="e.g. 73"></div>
+          </div>
+          <div class="muted" style="margin-top:6px">Aerobars for TT/tri: film the side view on the extensions.
+            Aero frontal-area testing uses the silhouette (see the “aero” checkbox in the Camera card).</div>
+        </div>
+        <label>Camera view plane * (calibrates which metrics are assessed)</label>
+        <div class="planeRow">
+          <button class="ghost" id="btnSag" onclick="setPlane('sagittal')">Side view (sagittal)</button>
+          <button class="ghost" id="btnFro" onclick="setPlane('frontal')">Front / back (frontal)</button>
+        </div>
+        <div class="muted" id="planeHelp" style="margin-top:6px">sagittal: overstride, shin angle,
+          knee flexion, trunk lean · frontal: pelvic drop, knee valgus, arm swing.</div>
+        <button class="big" id="btnStart" onclick="startSession()">▶ Start run session</button>
+        <button class="big ghost" id="btnStop" onclick="stopSession()" disabled>■ Stop</button>
+        <div id="startErr"></div>
+        <div id="sessionInfo" class="muted" style="margin-top:10px;"></div>
+        <div id="reportBox" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="card audiobar off" id="audioCard">
+        <h2>Audio biofeedback</h2>
+        <div class="row" style="align-items:center">
+          <div style="flex:0 0 auto">
+            <div class="bpm" id="bpmLabel">180</div>
+            <div class="muted">steps / min</div>
+          </div>
+          <div>
+            <div class="playrow">
+              <button class="ghost" onclick="bpmStep(-5)">−5</button>
+              <button class="ghost" onclick="bpmStep(5)">+5</button>
+              {% for p in met_presets %}<button class="ghost" onclick="bpmSet({{ p }})">{{ p }}</button>{% endfor %}
+            </div>
+            <div class="playrow" style="margin-top:6px">
+              <button class="ghost" onclick="syncCadence()">sync to live cadence</button>
+            </div>
+          </div>
+        </div>
+        <div class="muted" id="cadHelp" style="margin-top:6px">Live cadence estimate: – spm</div>
+        <div class="playrow" style="margin-top:10px">
+          <button id="btnAudio" onclick="enableAudio()">🔊 Enable audio (needs one click)</button>
+          <button id="btnMetro" class="ghost" onclick="toggleMetronome()" disabled>▶ Metronome</button>
+          <button id="btnVoice" class="ghost" onclick="toggleVoice()" disabled>🗣 Voice cues</button>
+        </div>
+        <div class="muted" id="audioState" style="margin-top:8px">Audio is off. Browsers need one
+          click before any sound can play.</div>
+        <div class="muted" style="margin-top:6px">Metronome: Web Audio lookahead scheduler
+          (±{{ met_step }} BPM, {{ met_min }}–{{ met_max }}). Voice: Web Speech,
+          min {{ voice_cooldown }} s between cues.</div>
+      </div>
+
+      <div class="card">
+        <h2>Camera</h2>
+        <label>Source type</label>
+        <select id="camKind" onchange="kindChanged()">
+          <option value="usb">USB camera (built-in / external)</option>
+          <option value="url">Phone camera stream (URL)</option>
+          <option value="file">Video file (MP4 / MOV / WebM)</option>
+        </select>
+        <div id="usbBox">
+          <label>Camera</label>
+          <div class="row">
+            <select id="usbIndex"></select>
+            <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
+          </div>
+        </div>
+        <div id="urlBox" style="display:none">
+          <label>Stream URL (phone IP-camera)</label>
+          <input id="urlInput" placeholder="http://192.168.1.50:8080/video">
+          <div class="muted" style="margin-top:6px">Android: “IP Webcam” app → Start server → use its
+            http://IP:8080/video address. Phone and PC on the same Wi-Fi.</div>
+        </div>
+        <div id="fileBox" style="display:none">
+          <label>Video file (MP4 / MOV / WebM)</label>
+          <input id="fileInput" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
+          <div class="muted" style="margin-top:6px">Uploads locally, then plays through the tracker
+            with slow-motion + scrubbing. Analysis CLI also available: tools/analyze_video.py</div>
+        </div>
+        <div class="muted" style="margin:10px 0 4px; font-size:12px">— accuracy options —</div>
+        <label style="display:flex; gap:8px; align-items:center">
+          <input type="checkbox" id="useCam2" style="width:auto"> <span>Second camera (rear / front
+          view, runs at the same time)</span></label>
+        <div id="cam2Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
+          <label>Second camera source</label>
+          <select id="cam2Kind" onchange="kind2Changed()">
+            <option value="usb">USB camera (external)</option>
+            <option value="url">Phone camera stream (URL)</option>
+            <option value="file">Video file</option>
+          </select>
+          <div id="usb2Box">
+            <label>Camera</label>
+            <div class="row">
+              <select id="usb2Index"></select>
+              <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
+            </div>
+          </div>
+          <div id="url2Box" style="display:none">
+            <label>Stream URL (second phone)</label>
+            <input id="url2Input" placeholder="http://192.168.1.51:8080/video">
+          </div>
+          <div id="file2Box" style="display:none">
+            <label>Video file (rear-view clip)</label>
+            <input id="file2Input" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
+          </div>
+        </div>
+        <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
+          <input type="checkbox" id="segPrimary" style="width:auto"> <span>Estimate frontal area
+          (aero) from the primary camera silhouette</span></label>
+        <label style="display:flex; gap:8px; align-items:center">
+          <input type="checkbox" id="segSecond" style="width:auto"> <span>…and from the second camera
+          (rear/side aero camera)</span></label>
+        <div class="row" style="margin-top:12px">
+          <button onclick="openCamera()">Open camera(s)</button>
+          <button class="ghost" onclick="closeCamera()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------------- middle: live view ---------------- -->
+    <div class="colmid">
+      <div class="card">
+        <h2>Live view</h2>
+        <div class="feedwrap">
+          <img id="feed" alt="camera feed">
+          <div class="countdown" id="countdownBox">01:00</div>
+        </div>
+        <img id="feed2" alt="second camera feed (rear / frontal view)" style="display:none; margin-top:8px">
+        <div class="muted" id="feed2note" style="display:none; font-size:11.5px">second camera — rear /
+          frontal control view (tracked at the same time)</div>
+
+        <div class="playbar" id="playbar">
+          <div class="playrow">
+            <b style="font-size:12.5px">Playback</b>
+            {% for s in playback_speeds %}<button class="ghost spd" id="spd{{ loop.index0 }}" onclick="setSpeed({{ s }})">{{ s }}×</button>{% endfor %}
+            <button class="ghost" id="btnPause" onclick="togglePause()">⏸ Pause</button>
+            <button class="ghost" onclick="stepFrame(-1)">◀ frame</button>
+            <button class="ghost" onclick="stepFrame(1)">frame ▶</button>
+            <span class="muted" id="timeLabel">0.00 / 0.00 s</span>
+          </div>
+          <div style="margin-top:6px">
+            <input type="range" id="seekBar" min="0" max="100" step="0.01" value="0"
+                   oninput="onSeekInput()" onchange="onSeekCommit()">
+          </div>
+        </div>
+
+        <div class="metrics">
+          <div class="m"><div class="k">Pose</div><div class="v" id="m_pose">–</div></div>
+          <div class="m"><div class="k">Cadence est.</div><div class="v" id="m_cad">–</div></div>
+          <div class="m"><div class="k">Knee L / R</div><div class="v" id="m_knee">–</div></div>
+          <div class="m"><div class="k">Hip L / R</div><div class="v" id="m_hip">–</div></div>
+          <div class="m"><div class="k">Ankle L / R</div><div class="v" id="m_ankle">–</div></div>
+          <div class="m"><div class="k">Elbow L / R</div><div class="v" id="m_elbow">–</div></div>
+          <div class="m"><div class="k">Shoulder L / R</div><div class="v" id="m_sh">–</div></div>
+          <div class="m"><div class="k">Trunk lean</div><div class="v" id="m_trunk">–</div></div>
+          <div class="m"><div class="k">Head tilt</div><div class="v" id="m_head">–</div></div>
+          <div class="m"><div class="k">Neck-trunk</div><div class="v" id="m_neck">–</div></div>
+        </div>
+        <h2 style="margin-top:12px">Biomechanics (per leg)</h2>
+        <div class="metrics">
+          <div class="m" id="tile_shin"><div class="k">Shin angle L / R</div><div class="v" id="m_shin">–</div></div>
+          <div class="m" id="tile_over"><div class="k">Overstride L / R</div><div class="v" id="m_over">–</div></div>
+          <div class="m" id="tile_kflex"><div class="k">Knee flexion L / R</div><div class="v" id="m_kflex">–</div></div>
+          <div class="m" id="tile_trunkfwd"><div class="k">Trunk fwd lean</div><div class="v" id="m_trunkfwd">–</div></div>
+          <div class="m" id="tile_pelvic"><div class="k">Pelvic tilt</div><div class="v" id="m_pelvic">–</div></div>
+          <div class="m" id="tile_valgus"><div class="k">Valgus / varus L / R</div><div class="v" id="m_valgus">–</div></div>
+          <div class="m" id="tile_events"><div class="k">Events IC/MS/TO</div><div class="v" id="m_events">–</div></div>
+          <div class="m" id="tile_power"><div class="k">Power / kg</div><div class="v" id="m_powerkg">–</div></div>
+        </div>
+        <div class="muted" style="margin-top:8px">Best results: whole body in frame, camera steady.
+          The selected view plane decides which metric family is assessed — the other family shows
+          “not assessed (wrong camera view)” instead of a number.
+          Joint angles are drawn on the skeleton in the live view.</div>
+      </div>
+    </div>
+
+    <!-- ---------------- right: big numbers + charts ---------------- -->
+    <div class="colright">
+      <div class="card">
+        <h2>Live numbers</h2>
+        <div class="bignums">
+          <div class="bn"><div class="k">Cadence</div><div class="v" id="bn_cad">–</div><div class="u">spm</div></div>
+          <div class="bn"><div class="k">Pose</div><div class="v" id="bn_pose" style="font-size:20px">–</div><div class="u">tracking state</div></div>
+          <div class="bn"><div class="k">Knee flexion L / R</div><div class="v" id="bn_knee">–</div><div class="u">deg</div></div>
+          <div class="bn"><div class="k">Trunk fwd lean</div><div class="v" id="bn_trunk">–</div><div class="u">deg</div></div>
+          <div class="bn"><div class="k">Shin angle L / R</div><div class="v" id="bn_shin">–</div><div class="u">deg</div></div>
+          <div class="bn"><div class="k">Pelvic tilt</div><div class="v" id="bn_pelvic">–</div><div class="u">deg</div></div>
+          <div class="bn wide"><div class="k">Valgus / varus L / R</div><div class="v" id="bn_valgus">–</div><div class="u">deg</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Metric vs time</h2>
+        <div class="chart">
+          <div class="ct"><span>Cadence (live estimate)</span><span class="muted">band {{ bands.cadence_spm[0] }}–{{ bands.cadence_spm[1] }} spm</span></div>
+          <canvas id="ch_cad"></canvas>
+        </div>
+        <div class="chart">
+          <div class="ct"><span>Knee flexion — L (red) / R (green)</span><span class="muted">band {{ bands.knee_flexion_max_deg[0] }}–{{ bands.knee_flexion_max_deg[1] }}°</span></div>
+          <canvas id="ch_knee"></canvas>
+        </div>
+        <div class="chart">
+          <div class="ct"><span>Trunk forward lean</span><span class="muted">band {{ bands.trunk_lean_deg[0] }}–{{ bands.trunk_lean_deg[1] }}°</span></div>
+          <canvas id="ch_trunk"></canvas>
+        </div>
+        <div class="muted">Rolling 90 s window; shaded area = reference band (heuristic,
+          not clinical norms). Samples arrive with the live poll (~1/s).</div>
+      </div>
+
+      <div class="card">
+        <h2>Live AI chat · local model ({{ ollama_model }})</h2>
+        <div class="playrow">
+          <button id="btnMonitor" class="ghost" onclick="toggleMonitor()">▶ Start live chat</button>
+          <select id="monInterval" style="width:auto">
+            <option value="20">every 20 s</option>
+            <option value="30" selected>every 30 s</option>
+            <option value="60">every 60 s</option>
+          </select>
+          <button class="ghost" onclick="clearChat()">Clear</button>
+        </div>
+        <div class="muted" id="monStatus" style="margin-top:6px">Off — auto commentary posts here
+          while a session is recording; ask questions any time. Only derived numbers reach the
+          local model (nothing leaves this PC); assistive observation, not a diagnosis.</div>
+        <div id="chatLog" style="max-height:40vh; overflow:auto; margin-top:8px; background:#0e141a;
+             border:1px solid #232c36; border-radius:8px; padding:10px; font-size:12.5px;
+             line-height:1.45;"></div>
+        <div class="playrow" style="margin-top:8px">
+          <input id="chatInput" placeholder="Ask about the live numbers…"
+                 onkeydown="if (event.key === 'Enter') askChat()" style="flex:1">
+          <button id="btnAsk" onclick="askChat()">Send</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ========================= PATIENTS & RESULTS ========================= -->
+<div id="viewData" class="tabview" style="display:none">
+  <div class="datagrid">
+
+    <div class="card" id="editCard" style="display:none">
+      <h2>Edit <span id="editWhat"></span></h2>
+      <div class="row">
+        <div><label>Patient name</label><input id="editName"></div>
+        <div><label>Phone</label><input id="editPhone"></div>
+      </div>
+      <div class="row">
+        <div><label>Weight (kg)</label><input id="editWeight" type="number" step="0.1"></div>
+        <div><label>Height (cm)</label><input id="editHeight" type="number" step="0.5"></div>
+        <div><label>Treadmill speed (km/h)</label><input id="editSpeed" type="number" step="0.1"></div>
+      </div>
+      <div class="playrow" style="margin-top:10px">
+        <button onclick="saveEdit()">Save changes</button>
+        <button class="ghost" onclick="cancelEdit()">Cancel</button>
+        <span class="muted" id="editNote">Weight/height/speed apply to the session; name/phone apply to the patient record.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Patients</h2>
+      <table>
+        <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Sessions</th><th></th></tr></thead>
+        <tbody id="patRows"><tr><td colspan="5" class="muted">No patients yet — run a session first.</td></tr></tbody>
+      </table>
+      <div class="muted" style="margin-top:8px">“history” loads the patient below · “✎ edit” changes the
+        saved name/phone (session rows have their own ✎ for weight/height/speed).</div>
+    </div>
+
+    <div class="split">
+      <div class="card">
+        <h2>Patient history (server-side, last 30 / patient)</h2>
+        <div class="histsel">
+          <div>
+            <label>Patient</label>
+            <select id="histPatient" onchange="loadHistory()"><option value="">–</option></select>
+          </div>
+          <div>
+            <label>Baseline session</label>
+            <select id="cmpA"></select>
+          </div>
+          <div>
+            <label>Follow-up session</label>
+            <select id="cmpB"></select>
+          </div>
+          <div style="flex:0 0 auto">
+            <button onclick="runCompare()">Compare A → B</button>
+          </div>
+        </div>
+        <div style="overflow:auto; max-height:420px; margin-top:10px">
+          <table>
+            <thead><tr><th>#</th><th>Date</th><th>Plane</th><th>Cadence</th><th>Form</th>
+              <th>Sym.</th><th>Risk</th><th>A/B</th><th></th></tr></thead>
+            <tbody id="histRows"><tr><td colspan="9" class="muted">Pick a patient.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Before / after comparison</h2>
+        <div id="cmpMeta" class="muted">Choose a baseline and a follow-up session, then press
+          Compare.</div>
+        <table style="margin-top:8px">
+          <thead><tr><th>Metric</th><th>Baseline</th><th>Follow-up</th><th>Δ</th><th>Verdict</th></tr></thead>
+          <tbody id="cmpRows"></tbody>
+        </table>
+        <div class="muted" id="cmpNote" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Sessions (all patients)</h2>
+      <table>
+        <thead><tr><th>#</th><th>Patient</th><th>Date</th><th>Plane</th><th>Cadence</th>
+          <th>Form score</th><th>Risk</th><th>Status</th><th>Report</th><th></th></tr></thead>
+        <tbody id="sessRows"><tr><td colspan="10" class="muted">No sessions yet.</td></tr></tbody>
+      </table>
+      <div class="muted" style="margin-top:8px">Report opens the print-ready page
+        (🖨 Print / Save as PDF button inside). ✎ edits the saved session.</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const PORT = {{ port }};
+const OLLAMA_MODEL = "{{ ollama_model }}";
+const VOICE_COOLDOWN_MS = {{ voice_cooldown }} * 1000;
+const MET_MIN = {{ met_min }}, MET_MAX = {{ met_max }}, MET_STEP = {{ met_step }};
+const NOT_ASSESSED = "not assessed (wrong camera view)";
+const BANDS = {{ bands | tojson }};
+let pollTimer = null, feedActive = false, lastReportSeen = null, sessionRunning = false;
+let viewPlane = "sagittal", planePlanned = "sagittal";
+let disciplinePlanned = "running", bikeTypePlanned = "road";
+let lastState = null, lastPlaneWarn = "", lastCad = null, lastDisc = "running";
+let allSessions = [], editSid = null, editPid = null;
+
+function $(id) { return document.getElementById(id); }
+function fmt(v, unit, d) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "–";
+  return (d === undefined ? Math.round(v) : v.toFixed(d)) + (unit || "");
+}
+function signed(v, unit, d) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "–";
+  return (v > 0 ? "+" : "") + v.toFixed(d === undefined ? 1 : d) + (unit || "");
+}
+function num(v) { return (v === null || v === undefined || Number.isNaN(+v)) ? null : +v; }
+function banner(msg, cls) {
+  const b = $("banner");
+  if (!msg) { b.style.display = "none"; return; }
+  b.textContent = msg; b.className = "banner " + (cls || "info");
+}
+async function jpost(url, body) {
+  const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"},
+                              body: JSON.stringify(body || {})});
+  return await r.json();
+}
+
+/* -------------------------------------------------------------- tabs ----- */
+function showTab(which) {
+  $("viewLive").style.display = which === "live" ? "" : "none";
+  $("viewData").style.display = which === "data" ? "" : "none";
+  $("tabLive").className = "tab" + (which === "live" ? " active" : "");
+  $("tabData").className = "tab" + (which === "data" ? " active" : "");
+  if (which === "data") { refreshPatients(); refreshSessions(); }
+  if (which === "live") drawCharts();
+}
+
+/* ---------------------------------------------------------- view plane ---- */
+function setPlane(p) {
+  planePlanned = p;
+  $("btnSag").className = p === "sagittal" ? "active" : "ghost";
+  $("btnFro").className = p === "frontal" ? "active" : "ghost";
+  $("planeHelp").textContent = p === "sagittal"
+    ? "sagittal: overstride, shin angle, knee flexion, trunk lean are assessed; pelvic drop, knee valgus and arm swing show “not assessed (wrong camera view)”."
+    : "frontal: pelvic drop, knee valgus/varus and arm-swing symmetry are assessed; overstride, shin angle, knee flexion and trunk lean show “not assessed (wrong camera view)”.";
+}
+function planeSuppressed(key) {
+  if (viewPlane === "sagittal")
+    return ["pelvic_tilt_deg", "knee_valgus_l", "knee_valgus_r", "arm_swing_sym_pct"].includes(key);
+  return ["shin_angle_l", "shin_angle_r", "overstride_l", "overstride_r", "trunk_lean_fwd",
+          "knee_flex_l", "knee_flex_r", "hip_ext_l", "hip_ext_r"].includes(key);
+}
+
+/* -------------------------------------------------------------- camera ---- */
+function kindChanged() {
+  const k = $("camKind").value;
+  $("usbBox").style.display = k === "usb" ? "" : "none";
+  $("urlBox").style.display = k === "url" ? "" : "none";
+  $("fileBox").style.display = k === "file" ? "" : "none";
+}
+
+function nonVideoPin(name) {
+  const n = (name || "").toLowerCase();
+  if (!n.includes("femto") && !n.includes("orbbec")) return "";
+  if (n.includes("depth")) return "That is the Orbbec Femto Mega DEPTH pin — it carries no colour video for pose tracking. Pick the RGB pin (marked ★ in the Camera list).";
+  if (n.includes(" ir ")) return "That is the Orbbec Femto Mega IR pin — it carries no colour video. Pick the RGB pin (marked ★ in the Camera list).";
+  return "";
+}
+
+async function refreshCams() {
+  $("usbIndex").innerHTML = "<option>scanning…</option>";
+  $("usb2Index").innerHTML = "<option>scanning…</option>";
+  const r = await fetch("/api/cameras"); const d = await r.json();
+  for (const sel of [$("usbIndex"), $("usb2Index")]) {
+    sel.innerHTML = "";
+    if (!d.cameras.length) {
+      sel.innerHTML = "<option value=''>no camera found — plug it in and press Scan</option>";
+      continue;
+    }
+    for (const c of d.cameras) {
+      const o = document.createElement("option");
+      o.value = c.index;
+      const label = (c.name ? c.name : "Camera " + c.index) + " — " + c.width + "x" + c.height;
+      o.textContent = (c.index === d.preferred ? "★ " : "") + label;
+      const nv = nonVideoPin(c.name);
+      if (nv) { o.dataset.nonvideo = nv; o.textContent += " · no colour video"; }
+      sel.appendChild(o);
+    }
+    if (d.preferred !== null && d.preferred !== undefined) sel.value = d.preferred;
+  }
+  // the primary pick should not silently reuse the same device as the rear camera
+  if (d.cameras.length > 1 && $("usbIndex").value === $("usb2Index").value) {
+    const other = d.cameras.find(c => String(c.index) !== String($("usbIndex").value));
+    if (other) $("usb2Index").value = other.index;
+  }
+}
+
+function setDiscipline(p) {
+  disciplinePlanned = p;
+  $("btnRun").className = p === "running" ? "active" : "ghost";
+  $("btnCyc").className = p === "cycling" ? "active" : "ghost";
+  $("bikeBox").style.display = p === "cycling" ? "" : "none";
+  $("btnStart").textContent = p === "cycling" ? "▶ Start cycling session" : "▶ Start run session";
+  $("planeHelp").textContent = p === "cycling"
+    ? "cycling: film the side view for knee/hip/torso fit angles; use the second camera for the rear view (hip rocking, knee tracking). TT/tri positions use the aerobars."
+    : "sagittal: overstride, shin angle, knee flexion, trunk lean are assessed; pelvic drop, knee valgus and arm swing show “not assessed (wrong camera view)”.";
+}
+function setBikeType(b) {
+  bikeTypePlanned = b;
+  for (const bt of ["road", "tt", "tri"]) {
+    const el = $("btnBt-" + bt);
+    if (el) el.className = b === bt ? "active" : "ghost";
+  }
+}
+function kind2Changed() {
+  const k = $("cam2Kind").value;
+  $("usb2Box").style.display = k === "usb" ? "" : "none";
+  $("url2Box").style.display = k === "url" ? "" : "none";
+  $("file2Box").style.display = k === "file" ? "" : "none";
+}
+
+async function openCamera() {
+  banner("");
+  const kind = $("camKind").value;
+  let payload = {kind};
+  if (kind === "usb") {
+    const v = $("usbIndex").value;
+    if (v === "") { banner("No USB camera found — plug it in and press Scan.", "err"); return false; }
+    const opt = $("usbIndex").selectedOptions[0];
+    if (opt && opt.dataset.nonvideo) { banner(opt.dataset.nonvideo, "err"); return false; }
+    payload.index = parseInt(v);
+  } else if (kind === "url") {
+    payload.url = $("urlInput").value.trim();
+    if (!payload.url) { banner("Paste the phone stream URL first.", "err"); return false; }
+  } else if (kind === "file") {
+    const f = $("fileInput").files[0];
+    if (!f) { banner("Choose a video file first.", "err"); return false; }
+    const fd = new FormData(); fd.append("video", f);
+    const up = await fetch("/api/upload", {method: "POST", body: fd});
+    const ud = await up.json();
+    if (!ud.ok) { banner("Upload failed: " + ud.error, "err"); return false; }
+    payload.path = ud.path;
+  }
+  payload.seg = $("segPrimary").checked;
+  // second camera (rear / frontal view) — independent source, same session
+  if ($("useCam2").checked) {
+    const k2 = $("cam2Kind").value;
+    const p2 = {kind: k2, seg: $("segSecond").checked};
+    if (k2 === "usb") {
+      const v2 = $("usb2Index").value;
+      if (v2 === "") { banner("No camera found for the second source — press Scan.", "err"); return false; }
+      const opt2 = $("usb2Index").selectedOptions[0];
+      if (opt2 && opt2.dataset.nonvideo) { banner(opt2.dataset.nonvideo, "err"); return false; }
+      p2.index = parseInt(v2);
+    } else if (k2 === "url") {
+      p2.url = $("url2Input").value.trim();
+      if (!p2.url) { banner("Paste the second stream URL first.", "err"); return false; }
+    } else if (k2 === "file") {
+      const f2 = $("file2Input").files[0];
+      if (!f2) { banner("Choose the rear-view video file first.", "err"); return false; }
+      const fd2 = new FormData(); fd2.append("video", f2);
+      const up2 = await fetch("/api/upload", {method: "POST", body: fd2});
+      const ud2 = await up2.json();
+      if (!ud2.ok) { banner("Second upload failed: " + ud2.error, "err"); return false; }
+      p2.path = ud2.path;
+    }
+    payload.source2 = p2;
+    payload.plane2 = "frontal";
+  }
+  const d = await jpost("/api/camera/open", payload);
+  if (!d.ok) { banner("Camera error: " + d.error, "err"); return false; }
+  banner("Opened: " + d.source + (d.source2 && d.source2 !== "none" ? "  +  " + d.source2 : ""), "info");
+  feedActive = true;
+  $("feed").src = "/video_feed?ts=" + Date.now();
+  return true;
+}
+
+async function closeCamera() {
+  await jpost("/api/camera/close");
+  feedActive = false;
+  $("feed").removeAttribute("src");
+  $("feed2").removeAttribute("src");
+  $("feed2").style.display = "none";
+  $("playbar").className = "playbar";
+  banner("Camera closed.", "info");
+}
+
+/* ------------------------------------------------------------ playback ---- */
+async function setSpeed(s) {
+  const d = await jpost("/api/playback", {speed: s});
+  if (!d.ok) { banner(d.error, "err"); return; }
+  document.querySelectorAll("button.spd").forEach(b => b.className = "ghost spd");
+  const idx = d.speeds.indexOf(s);
+  if (idx >= 0 && $("spd" + idx)) $("spd" + idx).className = "active spd";
+  banner("Playback speed " + s + "×", "info");
+}
+async function togglePause() {
+  const cur = (lastState && lastState.playback) ? !!lastState.playback.paused : false;
+  const d = await jpost("/api/playback", {paused: !cur});
+  if (!d.ok) { banner(d.error, "err"); return; }
+  $("btnPause").textContent = d.paused ? "▶ Resume" : "⏸ Pause";
+  $("btnPause").className = d.paused ? "active" : "ghost";
+}
+async function stepFrame(dir) {
+  const fps = (lastState && lastState.media && lastState.media.fps) ? lastState.media.fps : 30;
+  const d = await jpost("/api/playback", {step: dir / fps});
+  if (!d.ok) banner(d.error, "err");
+  if ($("btnPause")) $("btnPause").textContent = "▶ Resume";
+  refreshPlayback(d);
+}
+let seeking = false;
+function onSeekInput() { seeking = true; $("timeLabel").textContent = "seek → " + parseFloat($("seekBar").value).toFixed(2) + " s"; }
+async function onSeekCommit() {
+  const d = await jpost("/api/playback", {seek: parseFloat($("seekBar").value)});
+  seeking = false;
+  if (!d.ok) banner(d.error, "err");
+}
+function refreshPlayback(pb) {
+  if (!pb) return;
+  const can = !!pb.can_control;
+  $("playbar").className = can ? "playbar on" : "playbar";
+  if (!can) return;
+  const dur = pb.video_duration || 0;
+  $("seekBar").max = dur ? dur : 1;
+  if (!seeking) {
+    $("seekBar").value = pb.video_t || 0;
+    $("timeLabel").textContent = (pb.video_t || 0).toFixed(2) + " / " + (dur ? dur.toFixed(2) : "?") + " s";
+  }
+  if ($("btnPause")) {
+    $("btnPause").textContent = pb.paused ? "▶ Resume" : "⏸ Pause";
+    $("btnPause").className = pb.paused ? "active" : "ghost";
+  }
+  document.querySelectorAll("button.spd").forEach(b => b.className = "ghost spd");
+  const idx = (pb.speeds || []).indexOf(pb.speed);
+  if (idx >= 0 && $("spd" + idx)) $("spd" + idx).className = "active spd";
+}
+
+/* -------------------------------------------------------------- session --- */
+async function startSession() {
+  banner(""); $("startErr").textContent = "";
+  $("pname").style.borderColor = ""; $("pphone").style.borderColor = "";
+  const name = $("pname").value.trim(), phone = $("pphone").value.trim();
+  if (!name || !phone) {
+    $("startErr").textContent = "Name and phone are required.";
+    if (!name) $("pname").style.borderColor = "#b91c1c";
+    if (!phone) $("pphone").style.borderColor = "#b91c1c";
+    if (!name) $("pname").focus(); else $("pphone").focus();
+    banner("Name and phone are required.", "err");
+    return;
+  }
+  // a session needs a live camera — open the selected source automatically
+  if (!(lastState && lastState.active)) {
+    banner("No camera open — opening the selected source…", "info");
+    if (await openCamera()) {
+      for (let i = 0; i < 12; i++) {            // up to ~6 s: DirectShow opens can be slow
+        await new Promise(r => setTimeout(r, 500));
+        try { if ((await (await fetch("/api/state")).json()).active) break; } catch (e) {}
+      }
+    }
+    let st = null;
+    try { st = await (await fetch("/api/state")).json(); } catch (e) {}
+    if (!st || !st.active) {
+      $("startErr").textContent = "Could not start: no camera is open. Use the Camera card (Scan → Open camera).";
+      banner("Could not start: no camera is open.", "err");
+      return;
+    }
+  }
+  const d = await jpost("/api/session/start", {
+    name, phone, view_plane: planePlanned,
+    discipline: disciplinePlanned, bike_type: bikeTypePlanned,
+    weight_kg: $("pweight").value, height_cm: $("pheight").value,
+    speed_kmh: $("pspeed").value, duration_s: $("pdur").value,
+    cd_est: $("pcd") ? $("pcd").value : null,
+    saddle_cm: $("psaddle") ? $("psaddle").value : null,
+  });
+  if (!d.ok) {
+    $("startErr").textContent = "Could not start: " + d.error;
+    banner("Could not start: " + d.error, "err");
+    return;
+  }
+  banner("Session " + d.session_id + " started (" + (d.discipline || "running") + ", "
+         + d.view_plane + " view, " + d.duration + " s).", "info");
+  sessionRunning = true;
+  $("btnStart").disabled = true; $("btnStop").disabled = false;
+  $("reportBox").innerHTML = "";
+  refreshSessions();
+  if (monitorOn) monitorTick(true);              // begin live updates with the recording
+}
+
+async function stopSession() {
+  const d = await jpost("/api/session/stop");
+  if (!d.ok) { banner(d.error, "err"); return; }
+  banner("Session stopped — building report…", "info");
+}
+
+async function refreshSessions() {
+  const r = await fetch("/api/sessions"); const d = await r.json();
+  allSessions = d.sessions || [];
+  const tb = $("sessRows");
+  if (!allSessions.length) { tb.innerHTML = "<tr><td colspan='10' class='muted'>No sessions yet.</td></tr>"; return; }
+  tb.innerHTML = "";
+  for (const s of allSessions) {
+    const tr = document.createElement("tr");
+    const rep = s.status === "complete" || s.status === "incomplete"
+      ? `<a href="/report/${s.id}/" target="_blank">open</a> <a href="/report/${s.id}/" target="_blank" title="print / save as PDF">🖨</a>` : "–";
+    const riskCls = s.risk_level === "Low" ? "ok" : (s.risk_level === "High" ? "bad" : "warn");
+    tr.innerHTML = `<td>${s.id}</td><td>${s.patient_name || "?"}<br><span class="muted">${s.patient_phone || ""}</span></td>` +
+      `<td>${s.started_ts || ""}</td><td>${s.view_plane || ""}</td><td>${fmt(s.cadence_spm, "", 0)}</td>` +
+      `<td>${fmt(s.form_score, "", 0)}</td><td class="${riskCls}">${s.risk_level || "–"}</td>` +
+      `<td>${s.status}</td><td>${rep}</td>` +
+      `<td><button class="ghost" style="padding:2px 8px;font-size:11px" onclick="editSession(${s.id})">✎</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+
+/* ------------------------------------------- patients, history, compare -- */
+async function refreshPatients() {
+  const r = await fetch("/api/history"); const d = await r.json();
+  const sel = $("histPatient");
+  const cur = sel.value;
+  sel.innerHTML = "<option value=''>–</option>";
+  const tb = $("patRows");
+  tb.innerHTML = "";
+  const pts = d.patients || [];
+  if (!pts.length) tb.innerHTML = "<tr><td colspan='5' class='muted'>No patients yet — run a session first.</td></tr>";
+  for (const p of pts) {
+    const o = document.createElement("option");
+    o.value = p.id;
+    o.textContent = p.name + " · " + p.phone + " (" + p.n_sessions + " sessions)";
+    sel.appendChild(o);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${p.id}</td><td>${p.name}</td><td>${p.phone}</td><td>${p.n_sessions}</td>` +
+      `<td style="white-space:nowrap">` +
+      `<button class="ghost" style="padding:2px 8px;font-size:11px" onclick="openPatient(${p.id})">history</button> ` +
+      `<button class="ghost" style="padding:2px 8px;font-size:11px" onclick="editPatient(${p.id})">✎ edit</button></td>`;
+    tb.appendChild(tr);
+  }
+  if (cur) sel.value = cur;
+}
+
+function openPatient(pid) {
+  $("histPatient").value = pid;
+  loadHistory();
+}
+
+async function loadHistory() {
+  const pid = $("histPatient").value;
+  const tb = $("histRows");
+  $("cmpA").innerHTML = ""; $("cmpB").innerHTML = "";
+  if (!pid) { tb.innerHTML = "<tr><td colspan='9' class='muted'>Pick a patient.</td></tr>"; return; }
+  const r = await fetch("/api/patients/" + pid + "/history"); const d = await r.json();
+  if (!d.ok) { tb.innerHTML = "<tr><td colspan='9' class='muted'>No history.</td></tr>"; return; }
+  tb.innerHTML = "";
+  d.sessions.forEach((s) => {
+    const tr = document.createElement("tr");
+    const riskCls = s.risk_level === "Low" ? "ok" : (s.risk_level === "High" ? "bad" : "warn");
+    tr.innerHTML = `<td>${s.id}</td><td>${(s.started_ts || "").slice(0, 16)}</td>` +
+      `<td>${s.view_plane || ""}</td><td>${fmt(s.cadence_spm, "", 0)}</td>` +
+      `<td>${fmt(s.form_score, "", 0)}</td><td>${fmt(s.symmetry_mean_pct, "", 0)}</td>` +
+      `<td class="${riskCls}">${s.risk_level || "–"}</td>` +
+      `<td><button class="ghost" style="padding:2px 7px;font-size:11px" onclick="pick('${s.id}','a')">A</button> ` +
+      `<button class="ghost" style="padding:2px 7px;font-size:11px" onclick="pick('${s.id}','b')">B</button></td>` +
+      `<td style="white-space:nowrap"><a href="/report/${s.id}/" target="_blank">open</a> ` +
+      `<a href="/report/${s.id}/" target="_blank" title="print / save as PDF">🖨</a> ` +
+      `<button class="ghost" style="padding:2px 7px;font-size:11px" onclick="editSession(${s.id})">✎</button></td>`;
+    tb.appendChild(tr);
+    for (const which of ["cmpA", "cmpB"]) {
+      const o = document.createElement("option");
+      o.value = s.id;
+      o.textContent = "#" + s.id + " · " + (s.started_ts || "").slice(0, 16) + " · " + (s.view_plane || "");
+      $(which).appendChild(o);
+    }
+  });
+  if (d.sessions.length >= 2) {
+    $("cmpB").value = d.sessions[0].id;
+    $("cmpA").value = d.sessions[d.sessions.length - 1].id;
+  }
+  $("cmpMeta").textContent = d.patient.name + " · " + d.n + " session(s) shown (limit 30).";
+}
+
+function pick(sid, which) {
+  $(which === "a" ? "cmpA" : "cmpB").value = sid;
+  banner("Session #" + sid + " set as " + (which === "a" ? "baseline" : "follow-up"), "info");
+}
+
+async function runCompare() {
+  const a = $("cmpA").value, b = $("cmpB").value;
+  if (!a || !b) { banner("Pick a baseline and a follow-up session first.", "err"); return; }
+  const r = await fetch("/api/compare?a=" + a + "&b=" + b); const d = await r.json();
+  if (!d.ok) { banner(d.error || "compare failed", "err"); return; }
+  const tb = $("cmpRows"); tb.innerHTML = "";
+  for (const row of d.rows) {
+    const cls = row.verdict === "Improved" ? "ok" : (row.verdict === "Regressed" ? "bad" : "warn");
+    const dTxt = row.delta === null ? "–" : signed(row.delta, "", 2);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${row.label}</td><td>${fmt(row.baseline, "", 2)}</td>` +
+      `<td>${fmt(row.followup, "", 2)}</td><td class="${cls}">${dTxt}</td>` +
+      `<td><span class="badge ${cls}">${row.verdict}</span></td>`;
+    tb.appendChild(tr);
+  }
+  $("cmpMeta").textContent = "Baseline #" + d.baseline.id + " (" + (d.baseline.date || "") + ", " +
+    (d.baseline.plane || "") + ") → follow-up #" + d.followup.id + " (" + (d.followup.date || "") +
+    ", " + (d.followup.plane || "") + ")";
+  $("cmpNote").textContent = "Improved " + d.summary.improved + " · neutral " + d.summary.neutral +
+    " · regressed " + d.summary.regressed + " of " + d.summary.n + " metrics. " + (d.note || "");
+}
+
+/* --------------------------------------------------------- edit records --- */
+function showEditCard(what) {
+  $("editWhat").textContent = what;
+  $("editCard").style.display = "";
+  $("editCard").scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+function cancelEdit() {
+  editSid = null; editPid = null;
+  $("editCard").style.display = "none";
+}
+async function editPatient(pid) {
+  const d = await (await fetch("/api/history")).json();
+  const p = (d.patients || []).find(x => x.id === pid);
+  if (!p) return;
+  editSid = null; editPid = pid;
+  $("editName").value = p.name || "";
+  $("editPhone").value = p.phone || "";
+  $("editWeight").value = ""; $("editHeight").value = ""; $("editSpeed").value = "";
+  $("editNote").textContent = "Editing the patient record (name / phone).";
+  showEditCard("patient #" + pid);
+}
+function editSession(sid) {
+  const s = allSessions.find(x => x.id === sid);
+  if (!s) return;
+  editSid = sid; editPid = null;
+  $("editName").value = s.patient_name || "";
+  $("editPhone").value = s.patient_phone || "";
+  $("editWeight").value = (s.weight_kg === null || s.weight_kg === undefined) ? "" : s.weight_kg;
+  $("editHeight").value = (s.height_cm === null || s.height_cm === undefined) ? "" : s.height_cm;
+  $("editSpeed").value = (s.speed_kmh === null || s.speed_kmh === undefined) ? "" : s.speed_kmh;
+  $("editNote").textContent = "Editing session #" + sid + " (weight / height / speed + patient name / phone).";
+  showEditCard("session #" + sid);
+  showTab("data");
+}
+async function saveEdit() {
+  let d;
+  if (editSid !== null) {
+    d = await jpost("/api/session/" + editSid + "/edit", {
+      name: $("editName").value, phone: $("editPhone").value,
+      weight_kg: $("editWeight").value, height_cm: $("editHeight").value,
+      speed_kmh: $("editSpeed").value,
+    });
+  } else if (editPid !== null) {
+    d = await jpost("/api/patient/" + editPid + "/edit", {
+      name: $("editName").value, phone: $("editPhone").value,
+    });
+  } else { return; }
+  if (!d.ok) { banner("Edit failed: " + (d.error || "?"), "err"); return; }
+  banner("Changes saved.", "info");
+  cancelEdit();
+  refreshPatients(); refreshSessions();
+  if ($("histPatient").value) loadHistory();
+}
+
+/* ------------------------------------------------------------- live poll -- */
+const cadBuf = {t: [], l: [], r: []};
+function liveCadence(live, t) {
+  if (live.l_ankle_y === undefined || live.r_ankle_y === undefined) return null;
+  cadBuf.t.push(t); cadBuf.l.push(live.l_ankle_y); cadBuf.r.push(live.r_ankle_y);
+  while (cadBuf.t.length && t - cadBuf.t[0] > 5) { cadBuf.t.shift(); cadBuf.l.shift(); cadBuf.r.shift(); }
+  if (cadBuf.t.length < 12) return null;
+  let strikes = 0;
+  for (const arr of [cadBuf.l, cadBuf.r]) {
+    const mn = Math.min(...arr), mx = Math.max(...arr), thr = mn + 0.65 * (mx - mn);
+    for (let i = 1; i < arr.length - 1; i++) {
+      if (arr[i] >= arr[i - 1] && arr[i] > arr[i + 1] && arr[i] > thr) strikes++;
+    }
+  }
+  const span = cadBuf.t[cadBuf.t.length - 1] - cadBuf.t[0];
+  if (span < 2) return null;
+  const spm = (strikes / span) * 60;
+  return (spm > 100 && spm < 260) ? spm : null;
+}
+
+/* ------------------------------------------- charts (metric vs time) ------ */
+const CH_WIN = 90;
+const hist = { t: [], cad: [], kneeL: [], kneeR: [], trunk: [] };
+let histT0 = 0;
+
+function pushHist(live, cad, d) {
+  const now = (d.live && d.live.t) ? d.live.t : (Date.now() / 1000);
+  if (!histT0) histT0 = now;
+  const t = now - histT0;
+  hist.t.push(t);
+  hist.cad.push(cad === null || cad === undefined ? null : cad);
+  hist.kneeL.push(num(live.knee_flex_l));
+  hist.kneeR.push(num(live.knee_flex_r));
+  hist.trunk.push(num(live.trunk_lean_fwd));
+  while (hist.t.length && t - hist.t[0] > CH_WIN) {
+    for (const k in hist) hist[k].shift();
+  }
+}
+
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || 300, h = cv.clientHeight || 120;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+  }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+
+function drawChart(cvId, series, band) {
+  const cv = $(cvId);
+  if (!cv || !cv.clientWidth) return;
+  const ctx = setupCanvas(cv);
+  const w = cv.clientWidth, h = cv.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+  const L = 34, R = 8, T = 6, B = 16;
+
+  let vals = [];
+  for (const s of series) for (const v of s.data) if (v !== null) vals.push(v);
+  if (band) vals = vals.concat([band[0], band[1]]);
+  ctx.font = "10px system-ui";
+  if (!vals.length) {
+    ctx.fillStyle = "#5b6774";
+    ctx.fillText("waiting for live data…", L, h / 2);
+    return;
+  }
+  let mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+  if (mx - mn < 1e-6) { mn -= 5; mx += 5; }
+  const pad = (mx - mn) * 0.12; mn -= pad; mx += pad;
+
+  const tEnd = Math.max(CH_WIN, hist.t.length ? hist.t[hist.t.length - 1] : CH_WIN);
+  const tStart = tEnd - CH_WIN;
+  const X = t => L + ((t - tStart) / CH_WIN) * (w - L - R);
+  const Y = v => h - B - ((v - mn) / (mx - mn)) * (h - T - B);
+
+  if (band) {
+    ctx.fillStyle = "rgba(74,222,128,.10)";
+    ctx.fillRect(L, Y(band[1]), w - L - R, Math.max(0, Y(band[0]) - Y(band[1])));
+  }
+  ctx.strokeStyle = "#232c36";
+  ctx.strokeRect(L, T, w - L - R, h - T - B);
+  ctx.fillStyle = "#8a97a5";
+  ctx.fillText(mx.toFixed(0), 2, T + 8);
+  ctx.fillText(mn.toFixed(0), 2, h - B);
+  ctx.fillText("-" + CH_WIN + "s", L, h - 3);
+  ctx.fillText("now", w - R - 20, h - 3);
+
+  for (const s of series) {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < hist.t.length; i++) {
+      const v = s.data[i];
+      if (v === null) { started = false; continue; }
+      const x = X(hist.t[i]), y = Y(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    for (let i = hist.t.length - 1; i >= 0; i--) {
+      if (s.data[i] === null) continue;
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(X(hist.t[i]), Y(s.data[i]), 2.6, 0, 6.283);
+      ctx.fill();
+      break;
+    }
+  }
+}
+
+function drawCharts() {
+  drawChart("ch_cad", [{data: hist.cad, color: "#4ade80"}], BANDS.cadence_spm);
+  drawChart("ch_knee", [{data: hist.kneeL, color: "#f87171"}, {data: hist.kneeR, color: "#4ade80"}],
+            BANDS.knee_flexion_max_deg);
+  drawChart("ch_trunk", [{data: hist.trunk, color: "#fbbf24"}], BANDS.trunk_lean_deg);
+}
+
+function updateBigNumbers(live, cad, d) {
+  $("bn_cad").textContent = cad ? cad.toFixed(0) : "–";
+  $("bn_pose").textContent = live.pose_found ? "tracking" : (d.active ? "no pose" : "–");
+  $("bn_pose").className = "v " + (live.pose_found ? "ok" : (d.active ? "bad" : ""));
+  $("bn_knee").textContent = fmt(live.knee_flex_l, "", 0) + " / " + fmt(live.knee_flex_r, "", 0);
+  $("bn_trunk").textContent = signed(live.trunk_lean_fwd, "", 1);
+  $("bn_shin").textContent = fmt(live.shin_angle_l, "", 1) + " / " + fmt(live.shin_angle_r, "", 1);
+  $("bn_pelvic").textContent = signed(live.pelvic_tilt_deg, "", 1);
+  $("bn_valgus").textContent = signed(live.knee_valgus_l, "", 1) + " / " + signed(live.knee_valgus_r, "", 1);
+}
+
+async function poll() {
+  let d;
+  try { d = await (await fetch("/api/state")).json(); } catch (e) { return; }
+  lastState = d;
+  function live_identity(lv) { return (lv && lv.identity) ? lv.identity : null; }
+  $("statusPill").textContent = d.active ? ("● " + d.source) : "no camera";
+  $("fpsPill").textContent = d.active ? (d.fps + " fps") : "– fps";
+  viewPlane = (d.session && d.session.view_plane) || d.view_plane || "sagittal";
+  const disc = (d.session && d.session.discipline) || d.discipline || "running";
+  lastDisc = disc;
+  const btype = (d.session && d.session.bike_type) || d.bike_type || "";
+  $("discPill").textContent = "discipline: " + disc + (disc === "cycling" && btype ? " (" + btype + ")" : "");
+  // second camera (rear / frontal view) — live feed + fps
+  (function () {
+    const pill = $("cam2Pill"), note = $("feed2note"), img = $("feed2");
+    if (!d.has_camera2) {
+      pill.style.display = "none"; note.style.display = "none"; img.style.display = "none";
+      if (d.warning2) banner("Second camera: " + d.warning2, "err");
+      return;
+    }
+    pill.style.display = "";
+    pill.className = "pill ok";
+    pill.textContent = "cam2: " + (d.fps2 || 0).toFixed(1) + " fps";
+    if (img.style.display === "none" || !img.getAttribute("src"))
+      img.setAttribute("src", "/video_feed2?ts=" + Date.now());
+    img.style.display = ""; note.style.display = "";
+  })();
+  $("planePill").textContent = "view: " + viewPlane + (d.session ? " (recording)" : "");
+  // left/right identity state (label corrections + hidden far side)
+  (function () {
+    const el = $("trackPill"), idn = live_identity(d.live);
+    if (!el) return;
+    if (!idn) { el.textContent = "sides: –"; el.className = "pill"; return; }
+    const swaps = (idn.total_swaps | 0);
+    const hid = [], h = idn.hidden || {};
+    ["leg", "arm"].forEach(g => {
+      const sides = h[g] || [];
+      if (sides.length === 2) hid.push(g + "s not visible");
+      else if (sides.length === 1) hid.push("far " + g + " hidden (" + sides[0] + ")");
+    });
+    let txt = "sides: ";
+    if (hid.length) {
+      txt += hid.join(" · ");
+      el.className = "pill warn";
+      if (swaps) txt += " · " + swaps + " fix" + (swaps === 1 ? "" : "es");
+    } else if (swaps) {
+      txt += "pinned · " + swaps + " label fix" + (swaps === 1 ? "" : "es");
+      el.className = "pill ok";
+    } else {
+      txt += "locked";
+      el.className = "pill ok";
+    }
+    el.textContent = txt;
+  })();
+  if (d.error) banner(d.error, "err");
+  refreshPlayback(d.playback);
+
+  const live = d.live || {};
+  $("m_pose").textContent = live.pose_found ? "tracking" : (d.active ? "no pose" : "–");
+  $("m_pose").className = "v " + (live.pose_found ? "ok" : (d.active ? "bad" : ""));
+  $("m_knee").textContent = fmt(live.left_knee, "°") + " / " + fmt(live.right_knee, "°");
+  $("m_hip").textContent = fmt(live.left_hip, "°") + " / " + fmt(live.right_hip, "°");
+  $("m_ankle").textContent = fmt(live.left_ankle, "°") + " / " + fmt(live.right_ankle, "°");
+  $("m_elbow").textContent = fmt(live.left_elbow, "°") + " / " + fmt(live.right_elbow, "°");
+  $("m_sh").textContent = fmt(live.left_shoulder, "°") + " / " + fmt(live.right_shoulder, "°");
+  $("m_trunk").textContent = signed(live.trunk_lean, "°");
+  $("m_head").textContent = fmt(live.head_tilt, "°");
+  $("m_neck").textContent = fmt(live.neck_trunk, "°");
+
+  // biomechanics tiles, plane aware
+  function setTile(elId, valId, key, txt) {
+    const el = $(elId);
+    if (!el) return;
+    if (planeSuppressed(key)) { el.className = "m na"; $(valId).textContent = NOT_ASSESSED; return; }
+    el.className = "m";
+    $(valId).textContent = txt;
+  }
+  setTile("tile_shin", "m_shin", "shin_angle_l",
+    fmt(live.shin_angle_l, "°", 1) + " / " + fmt(live.shin_angle_r, "°", 1));
+  setTile("tile_over", "m_over", "overstride_l",
+    fmt(live.overstride_l, "", 3) + " / " + fmt(live.overstride_r, "", 3));
+  setTile("tile_kflex", "m_kflex", "knee_flex_l",
+    fmt(live.knee_flex_l, "°", 0) + " / " + fmt(live.knee_flex_r, "°", 0));
+  setTile("tile_trunkfwd", "m_trunkfwd", "trunk_lean_fwd", signed(live.trunk_lean_fwd, "°"));
+  setTile("tile_pelvic", "m_pelvic", "pelvic_tilt_deg", signed(live.pelvic_tilt_deg, "°"));
+  setTile("tile_valgus", "m_valgus", "knee_valgus_l",
+    signed(live.knee_valgus_l, "°") + " / " + signed(live.knee_valgus_r, "°"));
+  const ev = (d.session && d.session.events) ? d.session.events : null;
+  $("tile_events").className = "m";
+  $("m_events").textContent = ev ? (ev.IC + " / " + ev.MS + " / " + ev.TO) : "–";
+  $("tile_power").className = "m";
+  $("m_powerkg").textContent = live.power_per_kg_watts ? fmt(live.power_per_kg_watts, " W/kg", 2) : "–";
+
+  // live cadence estimate + voice cues
+  const cad = liveCadence(live, Date.now() / 1000);
+  lastCad = cad;
+  if (cad) {
+    $("cadLivePill").textContent = "cadence: " + cad.toFixed(0) + " spm";
+    $("m_cad").textContent = cad.toFixed(0) + " spm";
+    $("cadHelp").textContent = "Live cadence estimate: " + cad.toFixed(0) + " spm";
+  }
+  voiceRules(live, cad, d);
+
+  // big numbers + rolling charts
+  updateBigNumbers(live, cad, d);
+  if (d.active && (live.pose_found || live.l_ankle_y !== undefined)) pushHist(live, cad, d);
+  drawCharts();
+
+  const s = d.session;
+  if (s) {
+    sessionRunning = true;
+    $("btnStart").disabled = true; $("btnStop").disabled = false;
+    const left = Math.max(0, s.duration - s.elapsed);
+    const mm = String(Math.floor(left / 60)).padStart(2, "0");
+    const ss = String(Math.floor(left % 60)).padStart(2, "0");
+    $("countdownBox").style.display = "block";
+    $("countdownBox").textContent = mm + ":" + ss;
+    $("sessionInfo").textContent = "Session #" + s.id + " — " + s.patient.name +
+      " · " + s.elapsed.toFixed(1) + "s / " + s.duration + "s · " + s.rows + " frames · view: " +
+      (s.view_plane || viewPlane) + (s.events ? " · events " + s.events.n : "");
+  } else {
+    if (sessionRunning) { sessionRunning = false; $("btnStart").disabled = false; $("btnStop").disabled = true; }
+    $("countdownBox").style.display = "none";
+  }
+  if (d.session_finalizing) $("sessionInfo").textContent = "Building report…";
+  if (d.last_report_sid && d.last_report_sid !== lastReportSeen) {
+    lastReportSeen = d.last_report_sid;
+    $("reportBox").innerHTML = "<b>Report ready:</b> <a href='/report/" + d.last_report_sid +
+      "/' target='_blank'>open session #" + d.last_report_sid + "</a>";
+    banner("Report ready for session #" + d.last_report_sid, "info");
+    refreshSessions();
+  }
+}
+
+/* --------------------------------------------------- audio biofeedback ---- */
+let ac = null, audioReady = false, metroOn = false, voiceOn = false;
+let bpm = 180, nextClick = 0, schedTimer = null, beatCount = 0;
+let lastVoiceAt = 0, lastMsgAt = {};
+
+function ensureAudio() {
+  if (!ac) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return false;
+    ac = new Ctx();
+  }
+  if (ac.state === "suspended") ac.resume();
+  return true;
+}
+
+function enableAudio() {
+  if (!ensureAudio()) { banner("This browser has no Web Audio support.", "err"); return; }
+  audioReady = true;
+  $("audioCard").className = "audiobar";
+  $("btnAudio").disabled = true;
+  $("btnAudio").textContent = "🔊 Audio enabled";
+  $("btnMetro").disabled = false;
+  $("btnVoice").disabled = false;
+  $("audioState").textContent = "Audio ready. Metronome and voice cues are separate switches.";
+}
+
+function bpmLabel() { $("bpmLabel").textContent = bpm; }
+function bpmSet(v) {
+  bpm = Math.max(MET_MIN, Math.min(MET_MAX, Math.round(v / MET_STEP) * MET_STEP));
+  bpmLabel();
+}
+function bpmStep(d) { bpmSet(bpm + d); }
+function syncCadence() {
+  if (!lastCad) { banner("No live cadence estimate yet — run for a few seconds.", "err"); return; }
+  bpmSet(lastCad);
+  banner("Metronome synced to " + bpm + " spm", "info");
+}
+
+function clickAt(t, accent) {
+  const osc = ac.createOscillator(), g = ac.createGain();
+  osc.type = "square";
+  osc.frequency.value = accent ? 1600 : 1000;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.26, t + 0.001);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+  osc.connect(g); g.connect(ac.destination);
+  osc.start(t); osc.stop(t + 0.07);
+}
+
+function scheduler() {
+  if (!metroOn || !ac) return;
+  const ahead = 0.12;
+  while (nextClick < ac.currentTime + ahead) {
+    clickAt(nextClick, beatCount % 2 === 0);
+    nextClick += 60.0 / bpm;
+    beatCount++;
+  }
+}
+
+function toggleMetronome() {
+  if (!audioReady && !ensureAudio()) return;
+  metroOn = !metroOn;
+  if (metroOn) {
+    nextClick = ac.currentTime + 0.08; beatCount = 0;
+    if (!schedTimer) schedTimer = setInterval(scheduler, 25);
+    $("btnMetro").textContent = "⏹ Stop metronome";
+    $("btnMetro").className = "active";
+    $("audioState").textContent = "Metronome running at " + bpm + " BPM (Web Audio lookahead scheduler).";
+  } else {
+    if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
+    $("btnMetro").textContent = "▶ Metronome";
+    $("btnMetro").className = "ghost";
+    $("audioState").textContent = "Metronome stopped.";
+  }
+}
+
+function toggleVoice() {
+  if (!audioReady && !ensureAudio()) return;
+  voiceOn = !voiceOn;
+  $("btnVoice").className = voiceOn ? "active" : "ghost";
+  $("btnVoice").textContent = voiceOn ? "🗣 Voice cues on" : "🗣 Voice cues";
+  $("audioState").textContent = voiceOn
+    ? "Voice cues on — min " + (VOICE_COOLDOWN_MS / 1000) + " s between spoken messages."
+    : "Voice cues off.";
+  if (voiceOn) speak("Voice cues enabled");
+}
+
+function speak(msg) {
+  if (!voiceOn || !("speechSynthesis" in window)) return false;
+  const now = Date.now();
+  if (now - lastVoiceAt < VOICE_COOLDOWN_MS) return false;          // global cooldown
+  const prev = lastMsgAt[msg] || 0;
+  if (now - prev < VOICE_COOLDOWN_MS * 2) return false;             // per-message cooldown
+  lastVoiceAt = now; lastMsgAt[msg] = now;
+  try {
+    const u = new SpeechSynthesisUtterance(msg);
+    u.rate = 1.05; u.volume = 0.95; u.lang = "en-US";
+    window.speechSynthesis.speak(u);
+  } catch (e) { return false; }
+  return true;
+}
+
+/* rules driven by the live metrics — every cue waits for the cooldown */
+function voiceRules(live, cad, d) {
+  if (!voiceOn) return;
+  if (lastDisc === "cycling") return;         // cycling cues are coach-side for now
+  if (d.active && !live.pose_found) { speak("Tracking lost, step into frame"); return; }
+  if (cad && cad < 160) { speak("Cadence low, increase step rate"); return; }
+  if (viewPlane === "sagittal") {
+    const shin = Math.max(Math.abs(live.shin_angle_l || 0), Math.abs(live.shin_angle_r || 0));
+    if (shin > 8) { speak("Overstriding, land closer under your hips"); return; }
+  } else {
+    if ((live.pelvic_tilt_deg || 0) > 5) { speak("Keep your pelvis level"); return; }
+    const val = Math.max(live.knee_valgus_l || 0, live.knee_valgus_r || 0);
+    if (val > 12) { speak("Knees tracking out"); return; }
+  }
+  if ((live.trunk_lean_fwd || 0) < 2 && d.active) { speak("Lean slightly forward from the ankles"); return; }
+  if (cad && cad >= 168 && cad <= 190) speak("Form stable");
+}
+
+/* ----------------------------------------------------- live AI monitor --- */
+let monitorOn = false, monitorBusy = false, monitorTimer = null, monitorCount = 0;
+let chatHistory = [];
+const CHAT_HISTORY_MAX = 8;
+
+function chatStatus(msg) { $("monStatus").textContent = msg; }
+
+function chatAppend(role, text, meta) {
+  const log = $("chatLog");
+  const div = document.createElement("div");
+  div.className = "chatmsg " + role;
+  const who = document.createElement("div");
+  who.className = "who";
+  who.textContent = (role === "user" ? "you" : role === "assistant" ? "local model" : "—")
+                    + (meta ? " · " + meta : "");
+  const txt = document.createElement("div");
+  txt.className = "txt";
+  txt.textContent = text;
+  div.appendChild(who); div.appendChild(txt);
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return { txt: txt, who: who, box: div };
+}
+
+function pushChatHistory(role, text) {
+  chatHistory.push({role: role, content: String(text || "").slice(0, 900)});
+  if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory = chatHistory.slice(-CHAT_HISTORY_MAX);
+}
+
+function clearChat() {
+  chatHistory = []; $("chatLog").innerHTML = "";
+  chatStatus("Chat cleared." + (monitorOn ? " Monitor stays on." : ""));
+}
+
+function toggleMonitor() {
+  monitorOn = !monitorOn;
+  const btn = $("btnMonitor");
+  if (monitorOn) {
+    btn.textContent = "⏹ Stop live chat"; btn.className = "danger";
+    chatStatus("On — preloading the local model (first reply can take a minute)…");
+    jpost("/api/monitor/warm");
+    monitorTick(true);
+  } else {
+    btn.textContent = "▶ Start live chat"; btn.className = "ghost";
+    if (monitorTimer) { clearTimeout(monitorTimer); monitorTimer = null; }
+    chatStatus("Off. Auto updates run while a session is recording; questions work any time.");
+  }
+}
+
+function monitorIntervalS() { return Math.max(5, parseFloat($("monInterval").value) || 30); }
+
+function monitorTick(now) {
+  if (!monitorOn) return;
+  if (monitorTimer) { clearTimeout(monitorTimer); monitorTimer = null; }
+  if (!now) { monitorTimer = setTimeout(() => monitorTick(true), 4000); return; }
+  runAutoUpdate();
+}
+
+function scheduleNextMonitor(ms) { if (monitorOn) monitorTimer = setTimeout(() => monitorTick(true), ms); }
+
+async function runAutoUpdate() {
+  if (monitorBusy) { scheduleNextMonitor(3000); return; }
+  if (!(lastState && lastState.session)) {
+    chatStatus("Waiting for an active recording — start a session and updates begin.");
+    scheduleNextMonitor(5000); return;
+  }
+  const live = lastState.live || {};
+  if (!live.pose_found) {
+    chatStatus("Recording — waiting for pose tracking…");
+    scheduleNextMonitor(5000); return;
+  }
+  runMonitorRequest({mode: "auto", history: chatHistory, cadence_spm: lastCad},
+                    "update " + (++monitorCount), false, "");
+}
+
+async function askChat() {
+  const q = $("chatInput").value.trim();
+  if (!q) return;
+  if (monitorBusy) { chatStatus("The local model is busy — wait for the current reply."); return; }
+  $("chatInput").value = "";
+  runMonitorRequest({mode: "ask", question: q, history: chatHistory, cadence_spm: lastCad},
+                    "answer", true, q);
+}
+
+async function monitorStream(body, txtEl) {
+  let r;
+  try {
+    r = await fetch("/api/monitor/chat", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  } catch (e) { return {ok: false, error: "request failed: " + e}; }
+  if (!r.ok) {
+    let detail = "HTTP " + r.status;
+    try { const d = await r.json(); if (d.error) detail = d.error; } catch (e) {}
+    return {ok: false, error: detail};
+  }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = "", text = "", err = "";
+  while (true) {
+    let step;
+    try { step = await reader.read(); } catch (e) { err = String(e); break; }
+    if (step.done) break;
+    buf += dec.decode(step.value, {stream: true});
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+      if (ev.chunk) {
+        text += ev.chunk; txtEl.textContent = text;
+        $("chatLog").scrollTop = $("chatLog").scrollHeight;
+      } else if (ev.error) { err = ev.error; }
+    }
+  }
+  if (!text && err) return {ok: false, error: err};
+  if (!text) return {ok: false, error: "empty reply from the local model"};
+  return {ok: true, text: text};
+}
+
+async function runMonitorRequest(body, meta, isQuestion, question) {
+  monitorBusy = true;
+  $("btnAsk").disabled = true;
+  if (isQuestion) { chatAppend("user", question); pushChatHistory("user", question); }
+  const bubble = chatAppend("assistant", "", meta + " · thinking…");
+  const t0 = performance.now();
+  const res = await monitorStream(body, bubble.txt);
+  const dt = ((performance.now() - t0) / 1000).toFixed(1);
+  if (res.ok) {
+    bubble.who.textContent = "local model · " + meta + " · " + dt + " s";
+    pushChatHistory("assistant", res.text);
+    chatStatus((monitorOn ? "On — " : "") + "last reply in " + dt + " s · " + OLLAMA_MODEL
+               + " (local) · assistive observation, not a diagnosis"
+               + (monitorOn ? "; next update in ~" + monitorIntervalS() + " s." : "."));
+  } else {
+    bubble.box.className = "chatmsg sys";
+    bubble.txt.textContent = "Local model error: " + res.error;
+    chatStatus("Local model error (" + res.error + "). Is Ollama running?");
+  }
+  monitorBusy = false;
+  $("btnAsk").disabled = false;
+  if (monitorOn) scheduleNextMonitor(monitorIntervalS() * 1000);
+}
+
+/* --------------------------------------------------------------- boot ----- */
+setPlane("sagittal");
+setDiscipline("running");
+setBikeType("road");
+kindChanged();
+kind2Changed();
+$("useCam2").addEventListener("change", () => {
+  $("cam2Box").style.display = $("useCam2").checked ? "" : "none";
+});
+refreshCams();
+refreshSessions();
+refreshPatients();
+pollTimer = setInterval(poll, 800);
+poll();
+window.addEventListener("resize", drawCharts);
+</script>
+</body>
+</html>
