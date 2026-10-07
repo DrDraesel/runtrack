@@ -14,6 +14,30 @@ MODEL_PATH = MODELS_DIR / "pose_landmarker_full.task"
 MODEL_PATH_HEAVY = MODELS_DIR / "pose_landmarker_heavy.task"
 DB_PATH = DATA_DIR / "runtrack.db"
 
+# Optional per-computer AI settings file (gitignored — never committed):
+# KEY=VALUE lines in ai_settings.env next to app.py.  Real environment
+# variables always win over values from the file.
+AI_SETTINGS_FILE = BASE_DIR / "ai_settings.env"
+
+
+def _load_ai_settings(path):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value:
+            os.environ.setdefault(key, value)
+
+
+_load_ai_settings(AI_SETTINGS_FILE)
+
 # Bind address / port.  RUNTRACK_HOST=0.0.0.0 opens the UI to other devices on
 # the local network; the defaults keep it strictly local.
 HOST = os.environ.get("RUNTRACK_HOST", "127.0.0.1")
@@ -30,6 +54,16 @@ MAX_UPLOAD_MB = 800
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8:latest")  # default: the local vision model
+
+# Optional: use ANY OpenAI-compatible API instead of the local Ollama model.
+# When AI_API_URL is set, the form review and the live chat call that endpoint
+# with AI_API_KEY (optional) and AI_API_MODEL; OLLAMA_* are then ignored.
+# Examples (base URL): https://api.openai.com/v1 · https://openrouter.ai/api/v1
+# (any model, one key) · https://api.anthropic.com/v1 (OpenAI-compat) ·
+# https://generativelanguage.googleapis.com/v1beta/openai · http://127.0.0.1:1234/v1 (LM Studio)
+AI_API_URL = os.environ.get("AI_API_URL", "").strip().rstrip("/")
+AI_API_KEY = os.environ.get("AI_API_KEY", "").strip()
+AI_API_MODEL = os.environ.get("AI_API_MODEL", "").strip()
 
 VIS_MIN = 0.5             # minimum landmark visibility to use a landmark
 

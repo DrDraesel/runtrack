@@ -120,11 +120,14 @@ re-normalised over what the session actually measured (documented in
 mid-stance knee flexion 0.13, overstride 0.12, trunk lean 0.10, oscillation
 0.10).
 
-“Run local AI form review” sends the summary + snapshots to the **local** model
-(Ollama, `qwen3.8:latest`; endpoint/model overridable with the `OLLAMA_URL` /
-`OLLAMA_MODEL` variables below); it never leaves the PC unless you point it at
-another computer yourself. The first call loads the model (~40 s) and the whole
-review can take 1–3 minutes.
+“Run local AI form review” sends the summary + snapshots (up to 3 frames) to
+the AI model. By default that is the **local** Ollama model (`qwen3.8:latest`;
+endpoint/model overridable with the `OLLAMA_URL` / `OLLAMA_MODEL` variables
+below) and nothing leaves the PC. You can instead plug in ANY OpenAI-compatible
+API — cloud provider or local server — with `AI_API_URL` / `AI_API_KEY` /
+`AI_API_MODEL` (below); in that mode the summary and the frames are sent to
+that provider, so pick a vision-capable model. The first local call loads the
+model (~40 s) and the whole review can take 1–3 minutes.
 
 ## Tests
 
@@ -149,8 +152,9 @@ point it at a camera there.
 4. Run `Start Run Lab.cmd` and pick a camera source: a USB webcam on that PC,
    a phone on the same Wi-Fi running an IP-camera app, or a video file (no
    camera needed at all).
-5. The AI form review / live monitor needs Ollama on the machine you run the
-   app on — or point it at another computer’s Ollama with `OLLAMA_URL` below.
+5. The AI form review / live monitor needs a model: local Ollama on the
+   machine you run the app on, another computer’s Ollama via `OLLAMA_URL`, or
+   ANY API model via `AI_API_URL` / `AI_API_KEY` / `AI_API_MODEL` (below).
 
 ## Environment variables (all optional — set before launching)
 
@@ -161,7 +165,27 @@ point it at a camera there.
 - `OLLAMA_URL` — where the local model lives, default `http://127.0.0.1:11434`.
   Point it at another PC (e.g. `http://192.168.1.50:11434`) if Ollama runs there.
 - `OLLAMA_MODEL` — model name, default `qwen3.8:latest`.
+- `AI_API_URL` — use ANY OpenAI-compatible API instead of local Ollama, e.g.
+  `https://api.openai.com/v1`, `https://openrouter.ai/api/v1` (any model with
+  one key), `https://api.anthropic.com/v1`,
+  `https://generativelanguage.googleapis.com/v1beta/openai`, or a local server
+  like `http://127.0.0.1:1234/v1` (LM Studio). Empty (default) = local Ollama.
+- `AI_API_KEY` — the key for that endpoint (leave empty for local servers).
+- `AI_API_MODEL` — model name to request from that API (for the form review,
+  use a vision-capable model).
 - `RUNTRACK_NO_BROWSER` — set to `1` to stop the browser from opening automatically.
+
+Instead of `set`-ing variables every time, put the lines in `ai_settings.env`
+next to `app.py` (gitignored — never commit a real key). Real environment
+variables win over the file:
+
+```
+AI_API_URL=https://openrouter.ai/api/v1
+AI_API_KEY=your-key-here
+AI_API_MODEL=your-model-here
+```
+
+Leave `AI_API_URL` empty (or delete the file) to go back to the local model.
 
 Example (UI on the network + Ollama on another PC):
 

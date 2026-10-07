@@ -22,6 +22,7 @@ import numpy as np
 from flask import Flask, Response, abort, jsonify, render_template, request, send_file
 
 import advisor
+import ai_backend
 import cameras
 import config
 import cycling as CY
@@ -524,7 +525,7 @@ def _origin_ok():
 @app.get("/")
 def index():
     return render_template("index.html", default_duration=config.DEFAULT_DURATION_S,
-                           port=config.PORT, ollama_model=config.OLLAMA_MODEL,
+                           port=config.PORT, ollama_model=ai_backend.status_text(),
                            voice_cooldown=config.VOICE_COOLDOWN_S,
                            met_min=config.METRONOME_MIN_BPM,
                            met_max=config.METRONOME_MAX_BPM,
@@ -1066,27 +1067,14 @@ def api_coach(sid: int):
                 "power_est_watts", "power_per_kg_watts", "gait_events", "rear",
                 "not_assessed") if summary.get(k) is not None}, default=str)
         )
-    body = json.dumps({
-        "model": config.OLLAMA_MODEL,
-        "prompt": prompt,
-        "images": imgs,
-        "stream": False,
-    }).encode()
     try:
-        req = urllib.request.Request(
-            config.OLLAMA_URL + "/api/generate", data=body,
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=280) as resp:
-            out = json.loads(resp.read().decode())
-        text = (out.get("response") or "").strip()
-        if not text:
-            return jsonify({"ok": False, "error": "empty model response"}), 502
+        text = ai_backend.describe_images(prompt, imgs)
         STORE.save_json(sid, "coach.json", {
-            "model": config.OLLAMA_MODEL, "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "model": ai_backend.active_model(), "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "text": text, "images_used": len(imgs)})
         return jsonify({"ok": True, "text": text})
     except Exception as e:
-        return jsonify({"ok": False, "error": f"local model call failed: {e}"}), 502
+        return jsonify({"ok": False, "error": f"AI request failed: {e}"}), 502
 
 
 @app.post("/api/monitor/warm")
@@ -1097,7 +1085,7 @@ def api_monitor_warm():
 
     def _do_warm():
         try:
-            live_monitor.warm(config.OLLAMA_MODEL, config.OLLAMA_URL)
+            ai_backend.warm()
         except Exception:
             pass                                  # warming must never break the app
 
@@ -1111,7 +1099,8 @@ def api_monitor_chat():
 
     Body: {"mode": "auto"|"ask", "question": str?, "history": [...],
     "cadence_spm": float?}. The digest is built server-side from the current
-    live state; only derived numbers reach the local model.
+    live state; only derived numbers reach the configured model (local Ollama
+    or the API set with AI_API_URL).
     """
     if not _origin_ok():
         abort(403)
@@ -1130,8 +1119,7 @@ def api_monitor_chat():
 
     def gen():
         try:
-            for event in live_monitor.stream_chat(messages, config.OLLAMA_MODEL,
-                                                  config.OLLAMA_URL):
+            for event in ai_backend.chat_stream(messages):
                 yield (json.dumps(event, ensure_ascii=False, allow_nan=False)
                        + "\n").encode("utf-8")
         except GeneratorExit:                     # client closed the chat: stop quietly

@@ -201,7 +201,7 @@ class EndpointTests(unittest.TestCase):
     def test_monitor_chat_streams_ndjson_events(self):
         seen = {}
 
-        def fake_stream(messages, model, endpoint):
+        def fake_stream(messages, model, endpoint, **kwargs):
             seen["roles"] = [m["role"] for m in messages]
             yield {"chunk": "Cadence "}
             yield {"chunk": "looks steady."}
