@@ -1,11 +1,14 @@
 # RunTrack — running form tracker (local, Windows)
 
 Live joint tracking and running-form analytics on a treadmill, for USB cameras
-and phone cameras. Local only (binds 127.0.0.1); nothing is uploaded.
+and phone cameras. Local by default (binds 127.0.0.1); nothing is uploaded.
 
 ## Run
 
-Double-click **Start Run Lab.cmd**, or:
+First time on a computer: double-click **setup.cmd** (one time — creates the
+local `.venv`, installs the pinned requirements; needs Python 3.11).
+
+Then double-click **Start Run Lab.cmd**, or:
 
 ```
 .venv\Scripts\python.exe app.py
@@ -118,8 +121,10 @@ mid-stance knee flexion 0.13, overstride 0.12, trunk lean 0.10, oscillation
 0.10).
 
 “Run local AI form review” sends the summary + snapshots to the **local** model
-(Ollama, `qwen3.8:latest`); it never leaves the PC. The first call loads the
-model (~40 s) and the whole review can take 1–3 minutes.
+(Ollama, `qwen3.8:latest`; endpoint/model overridable with the `OLLAMA_URL` /
+`OLLAMA_MODEL` variables below); it never leaves the PC unless you point it at
+another computer yourself. The first call loads the model (~40 s) and the whole
+review can take 1–3 minutes.
 
 ## Tests
 
@@ -127,9 +132,42 @@ model (~40 s) and the whole review can take 1–3 minutes.
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-109 tests: metrics + biomechanics math, 1-Euro filter, synthetic gait-cycle
+194 tests: metrics + biomechanics math, 1-Euro filter, synthetic gait-cycle
 ground-truth latching, advisor scoring/compare, storage, real-video pipeline,
 report/API endpoints.
+
+## Use it on another computer (camera / phone camera connected there)
+
+Everything runs locally, so “anywhere” means: set it up once on that PC and
+point it at a camera there.
+
+1. Install Python 3.11 (https://www.python.org/downloads/ — check
+   “Add python.exe to PATH”).
+2. Get this folder onto the PC: `git clone` the repo (private — sign in to
+   GitHub first) or copy the folder.
+3. Run `setup.cmd` (one time: creates `.venv`, installs the pinned requirements).
+4. Run `Start Run Lab.cmd` and pick a camera source: a USB webcam on that PC,
+   a phone on the same Wi-Fi running an IP-camera app, or a video file (no
+   camera needed at all).
+5. The AI form review / live monitor needs Ollama on the machine you run the
+   app on — or point it at another computer’s Ollama with `OLLAMA_URL` below.
+
+## Environment variables (all optional — set before launching)
+
+- `RUNTRACK_HOST` — bind address, default `127.0.0.1`. Set `0.0.0.0` to open
+  the UI to other devices on your local network (e.g. watch from a tablet at
+  the treadmill; keep the default if you don’t need that).
+- `RUNTRACK_PORT` — HTTP port, default `8780`.
+- `OLLAMA_URL` — where the local model lives, default `http://127.0.0.1:11434`.
+  Point it at another PC (e.g. `http://192.168.1.50:11434`) if Ollama runs there.
+- `OLLAMA_MODEL` — model name, default `qwen3.8:latest`.
+- `RUNTRACK_NO_BROWSER` — set to `1` to stop the browser from opening automatically.
+
+Example (UI on the network + Ollama on another PC):
+
+```
+set RUNTRACK_HOST=0.0.0.0 && set OLLAMA_URL=http://192.168.1.50:11434 && .venv\Scripts\python.exe app.py
+```
 
 ## Limits (be honest about them)
 

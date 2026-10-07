@@ -1,4 +1,5 @@
 """RunTrack configuration and paths."""
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -13,8 +14,10 @@ MODEL_PATH = MODELS_DIR / "pose_landmarker_full.task"
 MODEL_PATH_HEAVY = MODELS_DIR / "pose_landmarker_heavy.task"
 DB_PATH = DATA_DIR / "runtrack.db"
 
-HOST = "127.0.0.1"
-PORT = 8780
+# Bind address / port.  RUNTRACK_HOST=0.0.0.0 opens the UI to other devices on
+# the local network; the defaults keep it strictly local.
+HOST = os.environ.get("RUNTRACK_HOST", "127.0.0.1")
+PORT = int(os.environ.get("RUNTRACK_PORT", "8780"))
 
 PROC_WIDTH = 960          # processing width for pose detection
 STREAM_FPS = 15           # MJPEG stream pacing
@@ -25,8 +28,8 @@ DEFAULT_DURATION_S = 60   # default run session duration
 MAX_DURATION_S = 900
 MAX_UPLOAD_MB = 800
 
-OLLAMA_URL = "http://127.0.0.1:11434"
-OLLAMA_MODEL = "qwen3.8:latest"   # local vision model (only one installed)
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8:latest")  # default: the local vision model
 
 VIS_MIN = 0.5             # minimum landmark visibility to use a landmark
 
