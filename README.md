@@ -143,8 +143,8 @@ point it at a camera there.
 
 1. Install Python 3.11 (https://www.python.org/downloads/ — check
    “Add python.exe to PATH”).
-2. Get this folder onto the PC: `git clone` the repo (private — sign in to
-   GitHub first) or copy the folder.
+2. Get this folder onto the PC: `git clone` the repo (public — no login
+   needed) or copy the folder.
 3. Run `setup.cmd` (one time: creates `.venv`, installs the pinned requirements).
 4. Run `Start Run Lab.cmd` and pick a camera source: a USB webcam on that PC,
    a phone on the same Wi-Fi running an IP-camera app, or a video file (no
