@@ -135,7 +135,7 @@ model (~40 s) and the whole review can take 1–3 minutes.
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-194 tests: metrics + biomechanics math, 1-Euro filter, synthetic gait-cycle
+209 tests: metrics + biomechanics math, 1-Euro filter, synthetic gait-cycle
 ground-truth latching, advisor scoring/compare, storage, real-video pipeline,
 report/API endpoints.
 
