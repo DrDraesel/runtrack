@@ -436,6 +436,8 @@ async function runCoach() {{
     bike = summary.get("bike") or {}
     rear = summary.get("rear") or {}
     aero = summary.get("aero") or {}
+    sv = summary.get("second_view") or {}
+    sv_plane = str(sv.get("view_plane") or summary.get("plane2") or "").lower()
     if discipline == "cycling":
         disc_label = ("cycling position analysis — "
                       + config.BIKE_LABELS.get(bike_type, bike_type))
@@ -538,6 +540,102 @@ async function runCoach() {{
 {rear_rows}</table>
 <p class="muted" style="font-size:12px">{esc(rear.get('scale_note') or '')}</p>"""
 
+    # ---- second view (rear / side): independent clip, independent plane ----
+    sv_rows_html = ""
+    if sv:
+        for k, v in (sv.get("form") or {}).items():
+            if v.get("in_band") is None:
+                status = '<span class="muted">reported only</span>'
+            else:
+                status = "✅ in range" if v.get("in_band") else "⚠️ outside"
+            band = v.get("band")
+            band_txt = f"{band[0]}–{band[1]}" if band else "—"
+            label = v.get("label") or k.replace("_", " ")
+            sv_rows_html += (f"<tr><td>{esc(label)}</td><td>{_fmt(v.get('value'))}</td>"
+                             f"<td>{esc(band_txt)}</td><td>{status}</td></tr>")
+        for k, reason in sorted((sv.get("not_assessed") or {}).items()):
+            sv_rows_html += (f'<tr class="na"><td>{esc(k.replace("_", " "))}</td>'
+                             f'<td colspan="3">{esc(reason)}</td></tr>')
+    sv_risk = sv.get("risk") or {}
+    sv_flags = "".join(
+        f"<li>{esc(f.get('finding'))} <span class=\"muted\">({f.get('points')} pt)</span></li>"
+        for f in (sv_risk.get("flags") or []))
+    sv_section = ""
+    if sv:
+        sv_section = f"""
+<h2>Second view — {esc(sv_plane)} view ({esc(summary.get('source2_label') or 'second camera')})</h2>
+<p class="muted" style="font-size:12.5px">Analysed on its own time base
+({_fmt(sv.get('rows'))} frames, {_fmt(round(float(sv.get('duration_s') or 0), 1), ' s')});
+second-view form score <b>{_fmt(sv.get('form_score'), ' / 100')}</b>. The two views are
+reported side by side and are not averaged into one number.</p>
+<table><tr><th>Metric</th><th>Value</th><th>Reference band</th><th>Status</th></tr>
+{sv_rows_html or '<tr><td colspan="4">—</td></tr>'}</table>
+{('<h2>Second-view risk flags</h2><ul>' + sv_flags + '</ul>') if sv_flags else '<p class="muted">No risk flags were triggered in the second view.</p>'}
+<p class="muted" style="font-size:12px">Each view is gated to its own plane: frontal metrics
+(pelvic drop, frontal knee collapse, arm-swing symmetry) only come from the rear/front clip;
+sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from the side clip.</p>
+"""
+
+    # ---- third view (front camera): own clip, own plane, own score -------
+    sv3 = summary.get("third_view") or {}
+    sv3_plane = str(sv3.get("view_plane") or summary.get("plane3") or "").lower()
+    sv3_dir = str(summary.get("direction3") or sv3.get("direction") or "").lower()
+    # front/rear is metadata: the frontal maths is mirror-invariant (pelvis midline)
+    sv3_where = (sv3_dir if sv3_dir in ("front", "rear")
+                 else sv3_plane or config.DEFAULT_PLANE2)
+    sv3_rows_html = ""
+    if sv3:
+        for k, v in (sv3.get("form") or {}).items():
+            if v.get("in_band") is None:
+                status = '<span class="muted">reported only</span>'
+            else:
+                status = "✅ in range" if v.get("in_band") else "⚠️ outside"
+            band = v.get("band")
+            band_txt = f"{band[0]}–{band[1]}" if band else "—"
+            label = v.get("label") or k.replace("_", " ")
+            sv3_rows_html += (f"<tr><td>{esc(label)}</td><td>{_fmt(v.get('value'))}</td>"
+                              f"<td>{esc(band_txt)}</td><td>{status}</td></tr>")
+        for k, reason in sorted((sv3.get("not_assessed") or {}).items()):
+            sv3_rows_html += (f'<tr class="na"><td>{esc(k.replace("_", " "))}</td>'
+                              f'<td colspan="3">{esc(reason)}</td></tr>')
+    sv3_risk = sv3.get("risk") or {}
+    sv3_flags = "".join(
+        f"<li>{esc(f.get('finding'))} <span class=\"muted\">({f.get('points')} pt)</span></li>"
+        for f in (sv3_risk.get("flags") or []))
+    mvs = summary.get("multi_view_sync") or {}
+    sv3_sync = ""
+    if sv3 and mvs:
+        counts = []
+        for v in (mvs.get("views") or []):
+            if not isinstance(v, dict):
+                continue
+            lab = v.get("label") or v.get("role") or "view"
+            n = v.get("rows")
+            counts.append(f"{esc(lab)} ({_fmt(n)} frames)" if n is not None else esc(lab))
+        clock = str(mvs.get("clocks") or "software")
+        note = mvs.get("note") or ("aligned by per-view t_rel timestamps; no hardware "
+                                   "genlock — expect up to ~1 frame offset")
+        sv3_sync = ('<p class="muted" style="font-size:11.5px">Multi-view sync — '
+                    + ("frame counts: " + " · ".join(counts) + " · " if counts else "")
+                    + f"{esc(clock)} clock only; {esc(note)}</p>")
+    sv3_section = ""
+    if sv3:
+        sv3_section = f"""
+<h2>Third view — {esc(sv3_where)} view ({esc(summary.get('source3_label') or 'third camera')})</h2>
+<p class="muted" style="font-size:12.5px">Analysed on its own time base
+({_fmt(sv3.get('rows'))} frames, {_fmt(round(float(sv3.get('duration_s') or 0), 1), ' s')});
+third-view form score <b>{_fmt(sv3.get('form_score'), ' / 100')}</b>. The views are
+reported side by side and are never averaged into one number; front and rear are the
+same frontal metric family, so the direction label is metadata only.</p>
+<table><tr><th>Metric</th><th>Value</th><th>Reference band</th><th>Status</th></tr>
+{sv3_rows_html or '<tr><td colspan="4">—</td></tr>'}</table>
+{('<h2>Third-view risk flags</h2><ul>' + sv3_flags + '</ul>') if sv3_flags else '<p class="muted">No risk flags were triggered in the third view.</p>'}
+{sv3_sync}
+<p class="muted" style="font-size:12px">Each view is gated to its own plane: frontal metrics
+(pelvic drop, frontal knee collapse, arm-swing symmetry) only come from the frontal clip;
+sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from the side clip.</p>
+"""
+
     # aero section (+ delta against the patient's previous cycling session)
     aero_section = ""
     if aero and aero.get("fa_frac_median") is not None:
@@ -622,6 +720,10 @@ async function runCoach() {{
         ("Risk level", f'<span class="{risk_cls}">{esc(risk.get("level"))}</span>'),
         ("Source", esc(sess.get("source_label"))),
     ]
+    if sv:
+        cards.append(("Second-view score", _fmt(sv.get("form_score"), " / 100")))
+    if sv3:
+        cards.append(("Third-view score", _fmt(sv3.get("form_score"), " / 100")))
     if summary.get("step_length_m"):
         cards.append(("Step length", _fmt(summary.get("step_length_m"), " m")))
     if summary.get("stride_length_m"):
@@ -664,6 +766,12 @@ async function runCoach() {{
                  if discipline == "cycling" else "")
     cam2_meta = (" · second camera: <b>signal present</b> (rear/front view metrics)"
                  if rear else "")
+    if sv:
+        cam2_meta += (" · second view: <b>" + esc(sv_plane) + "</b> ("
+                      + esc(summary.get("source2_label") or "second source") + ")")
+    if sv3:
+        cam2_meta += (" · third view: <b>" + esc(sv3_where) + "</b> ("
+                      + esc(summary.get("source3_label") or "third source") + ")")
     doc = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>RunTrack report — session {sid}</title>
@@ -752,6 +860,8 @@ async function runCoach() {{
 
 {bike_section}
 {rear_section}
+{sv_section}
+{sv3_section}
 {aero_section}
 
 <h2 class="group">{esc(coach_title)}</h2>
@@ -776,6 +886,7 @@ async function runCoach() {{
  <li>Reference bands are heuristics from common running-gait literature for recreational runners — not clinical norms.</li>
  {("<li>Cycling: fit bands follow accepted cycling-fit practice/industry guides (Velogic Studio triathlon metrics, Holmes method knee angles, tri/TT torso conventions) and the front camera measures the projected frontal area from the pose-model silhouette — an index, not a drag-coefficient measurement. Bike-fit changes are 3-5 mm steps at most, re-film to compare.</li>" if discipline == "cycling" else "")}
  {("<li>Second camera: rear-view numbers are peak-to-peak excursions of landmarks relative to a rolling mean (the rider/athlete shifts on the machine over a set). Treat them as relative control indicators, not laboratory kinematics.</li>" if rear else "")}
+ {("<li>Third view: the front clip is analysed on its own time base and its own plane; the report lists all views side by side and never averages them. Front and rear are the same frontal metric family (direction is metadata only), and the clips share only a software clock — no hardware genlock, so expect up to ~1 frame of offset.</li>" if sv3 else "")}
  {("<li>Aero: frontal area in m² needs height or shoulder width; the watts estimate assumes the drag coefficient is unchanged between sessions.</li>" if aero else "")}
  <li>Angles are 2D, from a single camera view. Sagittal metrics need a side view, frontal metrics need a front/back view; the other plane is reported as “{esc(config.NOT_ASSESSED_TEXT)}” instead of a number.</li>
  <li>Overstride in centimetres is a height-based estimate (leg length ≈ {config.LEG_LENGTH_HEIGHT_FRACTION} × height), not a measured length.</li>

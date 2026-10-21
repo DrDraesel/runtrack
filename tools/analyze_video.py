@@ -39,6 +39,7 @@ from side_identity import SideIdentity  # noqa: E402
 import metrics as M  # noqa: E402
 from session_store import Store  # noqa: E402
 import report as R  # noqa: E402
+import second_view as SV  # noqa: E402
 
 
 def _attach_hi(ev, ring):
@@ -92,6 +93,9 @@ def main():
                     choices=list(config.BIKE_TYPES))
     ap.add_argument("--rear", default=None,
                     help="second video, rear/frontal view — analysed in lockstep")
+    ap.add_argument("--rear-plane", default=config.DEFAULT_PLANE2,
+                    choices=list(config.VIEW_PLANES),
+                    help="camera view of the second clip (default: frontal = rear view)")
     ap.add_argument("--seg", action="store_true",
                     help="estimate frontal area (aero) from the primary silhouette")
     ap.add_argument("--seg2", action="store_true",
@@ -145,6 +149,7 @@ def main():
     sess_dir = config.SESSIONS_DIR / str(sid)
 
     rows, n, det, det2, snaps = [], 0, 0, 0, 0
+    rows2: list = []
     last_snap = -1e9
     lf = LandmarkFilter()
     lf2 = LandmarkFilter()
@@ -179,7 +184,13 @@ def main():
 
             # ---- second camera (rear / frontal view), lockstep -------------
             fm2 = {}
+            vt2 = None
             frame2 = _read_second(cap2, None, vt) if cap2 is not None else None
+            if frame2 is not None and cap2 is not None:
+                try:
+                    vt2 = max(0.0, float(cap2.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0)
+                except Exception:
+                    vt2 = None
             if frame2 is not None and engine2 is not None:
                 h2, w2 = frame2.shape[:2]
                 scale2 = args.proc_width / w2 if w2 > args.proc_width else 1.0
@@ -201,6 +212,9 @@ def main():
             for k2, v2 in fm2.items():
                 row["r_" + k2] = v2
             rows.append(row)
+            if fm2:
+                rel2 = ((vt2 if vt2 is not None else vt) - args.start)
+                rows2.append({**fm2, "t_rel": max(0.0, float(rel2))})
 
             annotated = draw_skeleton(proc.copy(), lms)
             overlay_angles(annotated, lms, fm)
@@ -251,6 +265,13 @@ def main():
     except Exception as e:
         summary.setdefault("labels", []).append(f"keyframe capture failed: {e}")
     advisor.enrich(summary)
+    if discipline == "running" and rows2:
+        sv = SV.analyze(rows2, params, args.rear_plane, events=None,
+                        discipline=discipline)
+        if sv:
+            summary["second_view"] = sv
+            summary["plane2"] = sv.get("view_plane")
+            summary["source2_label"] = Path(args.rear).name if args.rear else None
     store.save_csv(sid, rows)
     store.finish_session(sid, summary.get("duration_s"), n, summary, status="complete")
     report_path = R.build(sid, store)
@@ -263,6 +284,8 @@ def main():
         "discipline": discipline,
         "bike_type": bike_type if discipline == "cycling" else None,
         "view_plane": summary.get("view_plane"),
+        "second_view_plane": (summary.get("second_view") or {}).get("view_plane"),
+        "second_view_score": (summary.get("second_view") or {}).get("form_score"),
         "frames_processed": n,
         "frames_with_pose": det,
         "frames_with_pose_rear": det2,

@@ -38,6 +38,8 @@
   .feedwrap { position:relative; }
   #feed2 { width:100%; max-height:30vh; object-fit:contain; background:#0a0d10;
            border-radius:8px; border:1px solid #232c36; }
+  #feed3 { width:100%; max-height:26vh; object-fit:contain; background:#0a0d10;
+           border-radius:8px; border:1px solid #232c36; }
   .countdown { position:absolute; top:10px; right:14px; font-size:38px; font-weight:700;
         color:#ffd93d; text-shadow:0 2px 8px #000; display:none; }
   .metrics { display:grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
@@ -129,6 +131,7 @@
   <span class="pill" id="trackPill">sides: –</span>
   <span class="pill" id="cadLivePill">cadence: –</span>
   <span class="pill" id="cam2Pill" style="display:none">cam2: –</span>
+  <span class="pill" id="cam3Pill" style="display:none">cam3: –</span>
 </div>
 <div id="banner" class="banner"></div>
 
@@ -219,6 +222,11 @@
 
       <div class="card">
         <h2>Camera</h2>
+        <button class="big ghost" id="btnDualVid" onclick="dualVideoSetup()">📥 Import side + rear videos</button>
+        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Film the same run twice: one clip
+          from the side and one from behind (or in front). The side clip is analysed for sagittal
+          metrics, the rear clip for frontal metrics (pelvic drop, knee collapse, arm swing) — both in
+          one session and one report.</div>
         <label>Source type</label>
         <select id="camKind" onchange="kindChanged()">
           <option value="usb">USB camera (built-in / external)</option>
@@ -246,15 +254,20 @@
         </div>
         <div class="muted" style="margin:10px 0 4px; font-size:12px">— accuracy options —</div>
         <label style="display:flex; gap:8px; align-items:center">
-          <input type="checkbox" id="useCam2" style="width:auto"> <span>Second camera (rear / front
-          view, runs at the same time)</span></label>
+          <input type="checkbox" id="useCam2" style="width:auto"> <span>Second view (rear / side) —
+          second camera or video, same session</span></label>
         <div id="cam2Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
-          <label>Second camera source</label>
+          <label>Second view source</label>
           <select id="cam2Kind" onchange="kind2Changed()">
             <option value="usb">USB camera (external)</option>
             <option value="url">Phone camera stream (URL)</option>
             <option value="file">Video file</option>
           </select>
+          <label>Second view plane * (which metrics it assesses)</label>
+          <div class="planeRow">
+            <button class="ghost" id="btn2Fro" onclick="setPlane2('frontal')">Rear / front (frontal)</button>
+            <button class="ghost" id="btn2Sag" onclick="setPlane2('sagittal')">Side (sagittal)</button>
+          </div>
           <div id="usb2Box">
             <label>Camera</label>
             <div class="row">
@@ -267,8 +280,44 @@
             <input id="url2Input" placeholder="http://192.168.1.51:8080/video">
           </div>
           <div id="file2Box" style="display:none">
-            <label>Video file (rear-view clip)</label>
+            <label>Video file (rear / second-view clip)</label>
             <input id="file2Input" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
+          </div>
+        </div>
+        <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
+          <input type="checkbox" id="useCam3" style="width:auto"> <span>Third view (front camera) —
+          simultaneous front view</span></label>
+        <div id="cam3Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
+          <label>Third view source</label>
+          <select id="cam3Kind" onchange="kind3Changed()">
+            <option value="usb">USB camera (external)</option>
+            <option value="url">Phone camera stream (URL)</option>
+            <option value="file">Video file</option>
+          </select>
+          <label>Third view camera facing (front / rear of the runner)</label>
+          <div class="planeRow">
+            <button class="ghost" id="btn3Front" onclick="setDirection3('front')">Front (camera faces the runner)</button>
+            <button class="ghost" id="btn3Rear" onclick="setDirection3('rear')">Rear (camera follows the runner)</button>
+          </div>
+          <label>Third view plane * (which metrics it assesses)</label>
+          <div class="planeRow">
+            <button class="ghost" id="btn3Fro" onclick="setPlane3('frontal')">Front / rear (frontal)</button>
+            <button class="ghost" id="btn3Sag" onclick="setPlane3('sagittal')">Side (sagittal)</button>
+          </div>
+          <div id="usb3Box">
+            <label>Camera</label>
+            <div class="row">
+              <select id="usb3Index"></select>
+              <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
+            </div>
+          </div>
+          <div id="url3Box" style="display:none">
+            <label>Stream URL (third phone / front camera)</label>
+            <input id="url3Input" placeholder="http://192.168.1.52:8080/video">
+          </div>
+          <div id="file3Box" style="display:none">
+            <label>Video file (front-view clip)</label>
+            <input id="file3Input" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
           </div>
         </div>
         <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
@@ -277,6 +326,9 @@
         <label style="display:flex; gap:8px; align-items:center">
           <input type="checkbox" id="segSecond" style="width:auto"> <span>…and from the second camera
           (rear/side aero camera)</span></label>
+        <label style="display:flex; gap:8px; align-items:center">
+          <input type="checkbox" id="seg3" style="width:auto"> <span>…and from the third camera
+          (front-view aero camera)</span></label>
         <div class="row" style="margin-top:12px">
           <button onclick="openCamera()">Open camera(s)</button>
           <button class="ghost" onclick="closeCamera()">Close</button>
@@ -295,6 +347,8 @@
         <img id="feed2" alt="second camera feed (rear / frontal view)" style="display:none; margin-top:8px">
         <div class="muted" id="feed2note" style="display:none; font-size:11.5px">second camera — rear /
           frontal control view (tracked at the same time)</div>
+        <img id="feed3" alt="third camera feed (front view)" style="display:none; margin-top:8px">
+        <div class="muted" id="feed3note" style="display:none; font-size:11.5px">third camera — front view</div>
 
         <div class="playbar" id="playbar">
           <div class="playrow">
@@ -497,6 +551,8 @@ const NOT_ASSESSED = "not assessed (wrong camera view)";
 const BANDS = {{ bands | tojson }};
 let pollTimer = null, feedActive = false, lastReportSeen = null, sessionRunning = false;
 let viewPlane = "sagittal", planePlanned = "sagittal";
+let plane2Planned = "frontal";
+let plane3Planned = "frontal", direction3Planned = "front";
 let disciplinePlanned = "running", bikeTypePlanned = "road";
 let lastState = null, lastPlaneWarn = "", lastCad = null, lastDisc = "running";
 let allSessions = [], editSid = null, editPid = null;
@@ -539,7 +595,35 @@ function setPlane(p) {
   $("btnFro").className = p === "frontal" ? "active" : "ghost";
   $("planeHelp").textContent = p === "sagittal"
     ? "sagittal: overstride, shin angle, knee flexion, trunk lean are assessed; pelvic drop, knee valgus and arm swing show “not assessed (wrong camera view)”."
-    : "frontal: pelvic drop, knee valgus/varus and arm-swing symmetry are assessed; overstride, shin angle, knee flexion and trunk lean show “not assessed (wrong camera view)”.";
+    : "frontal: pelvic drop, knee valgus/varus and arm-swing symmetry are assessed; overstride, shin angle, knee flexion and trunk lean show “not assessed (wrong camera view).";
+}
+function setPlane2(p) {
+  plane2Planned = p;
+  $("btn2Fro").className = p === "frontal" ? "active" : "ghost";
+  $("btn2Sag").className = p === "sagittal" ? "active" : "ghost";
+}
+/* third view: the plane says which metrics it assesses, the direction says
+   whether the camera looks at the runner from the front or from behind. */
+function setPlane3(p) {
+  plane3Planned = p;
+  $("btn3Fro").className = p === "frontal" ? "active" : "ghost";
+  $("btn3Sag").className = p === "sagittal" ? "active" : "ghost";
+}
+function setDirection3(dir) {
+  direction3Planned = dir;
+  $("btn3Front").className = dir === "front" ? "active" : "ghost";
+  $("btn3Rear").className = dir === "rear" ? "active" : "ghost";
+}
+/* one click: primary = side-view clip, second view = rear-view clip */
+function dualVideoSetup() {
+  $("camKind").value = "file"; kindChanged();
+  $("useCam2").checked = true; $("cam2Box").style.display = "";
+  $("cam2Kind").value = "file"; kind2Changed();
+  setPlane("sagittal");
+  setPlane2("frontal");
+  banner("Pick the side-view clip and the rear-view clip, then press Open camera(s) — " +
+         "if a camera is already open, close it first so both clips are loaded.", "info");
+  $("fileInput").focus();
 }
 function planeSuppressed(key) {
   if (viewPlane === "sagittal")
@@ -565,10 +649,9 @@ function nonVideoPin(name) {
 }
 
 async function refreshCams() {
-  $("usbIndex").innerHTML = "<option>scanning…</option>";
-  $("usb2Index").innerHTML = "<option>scanning…</option>";
+  for (const id of ["usbIndex", "usb2Index", "usb3Index"]) $(id).innerHTML = "<option>scanning…</option>";
   const r = await fetch("/api/cameras"); const d = await r.json();
-  for (const sel of [$("usbIndex"), $("usb2Index")]) {
+  for (const sel of [$("usbIndex"), $("usb2Index"), $("usb3Index")]) {
     sel.innerHTML = "";
     if (!d.cameras.length) {
       sel.innerHTML = "<option value=''>no camera found — plug it in and press Scan</option>";
@@ -589,6 +672,13 @@ async function refreshCams() {
   if (d.cameras.length > 1 && $("usbIndex").value === $("usb2Index").value) {
     const other = d.cameras.find(c => String(c.index) !== String($("usbIndex").value));
     if (other) $("usb2Index").value = other.index;
+  }
+  // …and the third camera should not silently reuse a device already assigned
+  if (d.cameras.length > 2 &&
+      ($("usb3Index").value === $("usbIndex").value || $("usb3Index").value === $("usb2Index").value)) {
+    const free = d.cameras.find(c => String(c.index) !== String($("usbIndex").value)
+                                     && String(c.index) !== String($("usb2Index").value));
+    if (free) $("usb3Index").value = free.index;
   }
 }
 
@@ -614,6 +704,12 @@ function kind2Changed() {
   $("usb2Box").style.display = k === "usb" ? "" : "none";
   $("url2Box").style.display = k === "url" ? "" : "none";
   $("file2Box").style.display = k === "file" ? "" : "none";
+}
+function kind3Changed() {
+  const k = $("cam3Kind").value;
+  $("usb3Box").style.display = k === "usb" ? "" : "none";
+  $("url3Box").style.display = k === "url" ? "" : "none";
+  $("file3Box").style.display = k === "file" ? "" : "none";
 }
 
 async function openCamera() {
@@ -662,11 +758,40 @@ async function openCamera() {
       p2.path = ud2.path;
     }
     payload.source2 = p2;
-    payload.plane2 = "frontal";
+    payload.plane2 = plane2Planned;
+  }
+  // third camera (front view) — independent source, same session
+  if ($("useCam3").checked) {
+    const k3 = $("cam3Kind").value;
+    const p3 = {kind: k3};
+    if (k3 === "usb") {
+      const v3 = $("usb3Index").value;
+      if (v3 === "") { banner("No camera found for the third source — press Scan.", "err"); return false; }
+      const opt3 = $("usb3Index").selectedOptions[0];
+      if (opt3 && opt3.dataset.nonvideo) { banner(opt3.dataset.nonvideo, "err"); return false; }
+      p3.index = parseInt(v3);
+    } else if (k3 === "url") {
+      p3.url = $("url3Input").value.trim();
+      if (!p3.url) { banner("Paste the third stream URL first.", "err"); return false; }
+    } else if (k3 === "file") {
+      const f3 = $("file3Input").files[0];
+      if (!f3) { banner("Choose the front-view video file first.", "err"); return false; }
+      const fd3 = new FormData(); fd3.append("video", f3);
+      const up3 = await fetch("/api/upload", {method: "POST", body: fd3});
+      const ud3 = await up3.json();
+      if (!ud3.ok) { banner("Third upload failed: " + ud3.error, "err"); return false; }
+      p3.path = ud3.path;
+    }
+    payload.source3 = p3;
+    payload.plane3 = plane3Planned;
+    payload.direction3 = direction3Planned;
+    payload.seg3 = $("seg3").checked;
   }
   const d = await jpost("/api/camera/open", payload);
   if (!d.ok) { banner("Camera error: " + d.error, "err"); return false; }
-  banner("Opened: " + d.source + (d.source2 && d.source2 !== "none" ? "  +  " + d.source2 : ""), "info");
+  banner("Opened: " + d.source
+         + (d.source2 && d.source2 !== "none" ? "  +  " + d.source2 : "")
+         + (d.source3 && d.source3 !== "none" ? "  +  " + d.source3 : ""), "info");
   feedActive = true;
   $("feed").src = "/video_feed?ts=" + Date.now();
   return true;
@@ -678,6 +803,9 @@ async function closeCamera() {
   $("feed").removeAttribute("src");
   $("feed2").removeAttribute("src");
   $("feed2").style.display = "none";
+  $("feed3").removeAttribute("src");
+  $("feed3").style.display = "none";
+  $("feed3note").style.display = "none";
   $("playbar").className = "playbar";
   banner("Camera closed.", "info");
 }
@@ -1113,6 +1241,24 @@ async function poll() {
       img.setAttribute("src", "/video_feed2?ts=" + Date.now());
     img.style.display = ""; note.style.display = "";
   })();
+  // third camera (front view) — live feed + fps + facing/plane caption
+  (function () {
+    const pill = $("cam3Pill"), note = $("feed3note"), img = $("feed3");
+    if (!d.has_camera3) {
+      pill.style.display = "none"; note.style.display = "none"; img.style.display = "none";
+      if (d.warning3) banner("Third camera: " + d.warning3, "err");
+      return;
+    }
+    pill.style.display = "";
+    pill.className = "pill ok";
+    pill.textContent = "cam3: " + (d.fps3 || 0).toFixed(1) + " fps";
+    if (img.style.display === "none" || !img.getAttribute("src"))
+      img.setAttribute("src", "/video_feed3?ts=" + Date.now());
+    img.style.display = "";
+    note.style.display = "";
+    note.textContent = "third camera — " + (d.direction3 || "front") + " · "
+                       + (d.plane3 || "frontal") + " · " + (d.fps3 || 0).toFixed(1) + " fps";
+  })();
   $("planePill").textContent = "view: " + viewPlane + (d.session ? " (recording)" : "");
   // left/right identity state (label corrections + hidden far side)
   (function () {
@@ -1484,12 +1630,19 @@ async function runMonitorRequest(body, meta, isQuestion, question) {
 
 /* --------------------------------------------------------------- boot ----- */
 setPlane("sagittal");
+setPlane2("frontal");
+setPlane3("frontal");
+setDirection3("front");
 setDiscipline("running");
 setBikeType("road");
 kindChanged();
 kind2Changed();
+kind3Changed();
 $("useCam2").addEventListener("change", () => {
   $("cam2Box").style.display = $("useCam2").checked ? "" : "none";
+});
+$("useCam3").addEventListener("change", () => {
+  $("cam3Box").style.display = $("useCam3").checked ? "" : "none";
 });
 refreshCams();
 refreshSessions();

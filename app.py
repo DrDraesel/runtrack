@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import urllib.request
+import uuid
 import webbrowser
 from pathlib import Path
 
@@ -30,6 +31,7 @@ import gait_events as GA
 import live_monitor
 import metrics as M
 import report as R
+import second_view as SV
 from filters import LandmarkFilter
 from pose_engine import (PoseEngine, draw_skeleton, make_crop_refiner,
                          overlay_angles, person_crop_box)
@@ -68,6 +70,16 @@ class Live:
         self.live2 = {}
         self.fps2 = 0.0
         self.warn2 = None
+        # optional simultaneous third (front) camera — own plane + stream
+        self.source3: dict | None = None
+        self.source3_label: str = "none"
+        self.plane3 = config.DEFAULT_PLANE3
+        self.direction3 = config.DEFAULT_DIRECTION3
+        self.seg3 = False
+        self.latest_jpeg3: bytes | None = None
+        self.live3 = {}
+        self.fps3 = 0.0
+        self.warn3: str | None = None
         self.discipline = config.DEFAULT_DISCIPLINE
         self.bike_type = config.DEFAULT_BIKE_TYPE
         # media playback (video files): slow-motion + scrubbing
@@ -94,6 +106,16 @@ class Live:
         self.live2 = {}
         self.fps2 = 0.0
         self.warn2 = None
+        # third (front) camera: stale frames/state must never leak across opens
+        self.source3 = None
+        self.source3_label = "none"
+        self.plane3 = config.DEFAULT_PLANE3
+        self.direction3 = config.DEFAULT_DIRECTION3
+        self.seg3 = False
+        self.latest_jpeg3 = None
+        self.live3 = {}
+        self.fps3 = 0.0
+        self.warn3 = None
 
     def playback_state(self) -> dict:
         return {
@@ -169,6 +191,14 @@ def _finalize(reason="complete"):
         seeks = int(sess.get("seeks", 0))
         discipline = str(sess.get("discipline") or config.DEFAULT_DISCIPLINE).lower()
         bike_type = sess.get("bike_type") or config.DEFAULT_BIKE_TYPE
+        rows2 = list(sess.get("rows2") or [])
+        plane2 = sess.get("plane2") or config.DEFAULT_PLANE2
+        source2_label = sess.get("source2_label") or "none"
+        rows3 = list(sess.get("rows3") or [])
+        plane3 = sess.get("plane3") or config.DEFAULT_PLANE3
+        direction3 = sess.get("direction3") or config.DEFAULT_DIRECTION3
+        source3_label = sess.get("source3_label") or "none"
+        source1_label = sess.get("source1_label") or "none"
     status = "complete" if reason == "complete" else "incomplete"
     try:
         if discipline == "running":
@@ -212,6 +242,47 @@ def _finalize(reason="complete"):
                 f"video playback was scrubbed during this session "
                 f"({seeks} seek jumps) — the time axis has gaps")
         advisor.enrich(summary)
+        # ---- second view (rear / side): its own time base, its own plane ----
+        if discipline == "running" and rows2:
+            try:
+                sv = SV.analyze(rows2, params, plane2, events=None,
+                                discipline=discipline)
+            except Exception as e:
+                sv = None
+                summary.setdefault("labels", []).append(
+                    f"second view analysis failed: {e}")
+            if sv:
+                summary["second_view"] = sv
+                summary["plane2"] = sv.get("view_plane") or plane2
+                summary["source2_label"] = source2_label
+        # ---- third view (front): same contract as the second view ----
+        if discipline == "running" and rows3:
+            try:
+                tv = SV.analyze(rows3, params, plane3, events=None,
+                                discipline=discipline, direction=direction3)
+            except Exception as e:
+                tv = None
+                summary.setdefault("labels", []).append(
+                    f"third view analysis failed: {e}")
+            if tv:
+                summary["third_view"] = tv
+                summary["plane3"] = tv.get("view_plane") or plane3
+                summary["source3_label"] = source3_label
+                summary["direction3"] = direction3
+        # ---- synchronisation honesty: software clocks, no genlock ----
+        views = [{"role": "primary", "label": source1_label, "rows": len(rows)}]
+        if source2_label not in (None, "", "none"):
+            views.append({"role": "second", "label": source2_label,
+                          "rows": len(rows2)})
+        if source3_label not in (None, "", "none"):
+            views.append({"role": "third", "label": source3_label,
+                          "rows": len(rows3)})
+        summary["multi_view_sync"] = {
+            "clocks": "software",
+            "views": views,
+            "note": ("no hardware genlock; views are aligned by their own "
+                     "t_rel timestamps; expect up to ~1 frame of offset"),
+        }
         if reason == "stopped":
             summary["note"] = "session stopped early by operator"
             status = "complete" if elapsed >= 5 else "incomplete"
@@ -259,16 +330,20 @@ def _hud(frame, fm, fps, sess):
 def _loop(src: dict):
     cap = None
     cap2 = None
+    cap3 = None
     engine = None
     engine2 = None
+    engine3 = None
     lf = LandmarkFilter()
     lf2 = LandmarkFilter()
+    lf3 = LandmarkFilter()
     si = SideIdentity() if config.SIDE_IDENTITY_ENABLED else None
     si2 = SideIdentity() if config.SIDE_IDENTITY_ENABLED else None
+    si3 = SideIdentity() if config.SIDE_IDENTITY_ENABLED else None
     ended_naturally = False
     try:
         cap = cameras.open_source(**{k: v for k, v in src.items()
-                                     if k not in ("seg", "source2")})
+                                     if k not in ("seg", "source2", "source3")})
         if cap is None:
             with L.lock:
                 L.error = f"could not open source: {src}"
@@ -285,8 +360,20 @@ def _loop(src: dict):
                     L.warn2 = f"second camera could not be opened: {src2}"
             else:
                 engine2 = PoseEngine(config.MODEL_PATH, seg=bool(src2.get("seg")))
+        # ------------------------------ optional simultaneous third (front) camera
+        src3 = src.get("source3") or {}
+        if src3:
+            cap3 = cameras.open_source(**{k: v for k, v in src3.items()
+                                          if k != "seg"})
+            if cap3 is None:
+                with L.lock:
+                    L.warn3 = f"third camera could not be opened: {src3}"
+            else:
+                engine3 = PoseEngine(config.MODEL_PATH, seg=bool(src3.get("seg")))
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         is_file = src.get("kind") == "file"
+        is_file2 = bool(src2) and src2.get("kind") == "file"
+        is_file3 = bool(src3) and src3.get("kind") == "file"
         n_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
         with L.lock:
             L.media = {
@@ -297,6 +384,7 @@ def _loop(src: dict):
         base_pace = (1.0 / src_fps) if (is_file and 5 <= src_fps <= 120) else 0.0
         fps, fps_n, fps_t = 0.0, 0, time.time()
         fps2, fps2_n, fps2_t = 0.0, 0, time.time()
+        fps3, fps3_n, fps3_t = 0.0, 0, time.time()
         while not L.stop_evt.is_set():
             t_frame = time.monotonic()
             with L.lock:
@@ -308,7 +396,7 @@ def _loop(src: dict):
                 time.sleep(0.05)
                 continue
             if is_file and seek_t is not None:
-                for c_ in (cap, cap2):
+                for c_ in (cap, cap2, cap3):
                     if c_ is not None:
                         try:
                             c_.set(cv2.CAP_PROP_POS_MSEC, max(0.0, float(seek_t)) * 1000.0)
@@ -321,6 +409,10 @@ def _loop(src: dict):
                     lf2.reset()
                 if si2 is not None:
                     si2.reset()
+                if lf3 is not None:
+                    lf3.reset()
+                if si3 is not None:
+                    si3.reset()
             ok, frame = cap.read()
             if not ok:
                 if is_file:
@@ -330,6 +422,7 @@ def _loop(src: dict):
                 continue
             # ---- second camera (best effort: never blocks the primary)
             frame2 = None
+            vt2 = None
             if cap2 is not None:
                 try:
                     ok2, fr2 = cap2.read()
@@ -337,6 +430,29 @@ def _loop(src: dict):
                         frame2 = fr2
                 except Exception:
                     frame2 = None
+            # second view keeps its OWN clock: a 60 fps rear clip next to a
+            # 30 fps side clip must not be analysed on the primary's time axis
+            if frame2 is not None and cap2 is not None and is_file2:
+                try:
+                    vt2 = max(0.0, float(cap2.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0)
+                except Exception:
+                    vt2 = None
+            # ---- third camera (best effort: never blocks the primary)
+            frame3 = None
+            vt3 = None
+            if cap3 is not None:
+                try:
+                    ok3, fr3 = cap3.read()
+                    if ok3:
+                        frame3 = fr3
+                except Exception:
+                    frame3 = None
+            # the third view's own clock mirrors the second view's rule
+            if frame3 is not None and cap3 is not None and is_file3:
+                try:
+                    vt3 = max(0.0, float(cap3.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0)
+                except Exception:
+                    vt3 = None
             with L.lock:
                 L.frames_seen += 1
             vt = None
@@ -364,7 +480,7 @@ def _loop(src: dict):
             overlay_angles(annotated, lms, fm)
 
             # ---- second camera: detect + metrics + its own annotated frame
-            fm2, ident2, annotated2 = {}, None, None
+            fm2, ident2, annotated2, lms2 = {}, None, None, None
             if frame2 is not None and engine2 is not None:
                 h2, w2 = frame2.shape[:2]
                 scale2 = config.PROC_WIDTH / w2 if w2 > config.PROC_WIDTH else 1.0
@@ -380,6 +496,23 @@ def _loop(src: dict):
                 annotated2 = draw_skeleton(proc2.copy(), lms2)
                 overlay_angles(annotated2, lms2, fm2)
 
+            # ---- third camera: detect + metrics + its own annotated frame
+            fm3, ident3, annotated3, lms3 = {}, None, None, None
+            if frame3 is not None and engine3 is not None:
+                h3, w3 = frame3.shape[:2]
+                scale3 = config.PROC_WIDTH / w3 if w3 > config.PROC_WIDTH else 1.0
+                proc3 = (cv2.resize(frame3, None, fx=scale3, fy=scale3)
+                         if scale3 != 1.0 else frame3)
+                lms_raw3 = engine3.detect(proc3, int(t_mono * 1000))
+                if si3 is not None:
+                    lms_raw3, ident3 = si3.update(lms_raw3, t_mono)
+                lms3 = lf3(lms_raw3, t_mono) if lms_raw3 is not None else None
+                fm3 = M.frame_metrics(lms3)
+                if src3.get("seg") and engine3.seg_frac is not None:
+                    fm3["fa_frac"] = engine3.seg_frac
+                annotated3 = draw_skeleton(proc3.copy(), lms3)
+                overlay_angles(annotated3, lms3, fm3)
+
             fps_n += 1
             now = time.time()
             if now - fps_t >= 1.0:
@@ -390,6 +523,11 @@ def _loop(src: dict):
                 if now - fps2_t >= 1.0:
                     fps2 = fps2_n / (now - fps2_t)
                     fps2_n, fps2_t = 0, now
+            if frame3 is not None:
+                fps3_n += 1
+                if now - fps3_t >= 1.0:
+                    fps3 = fps3_n / (now - fps3_t)
+                    fps3_n, fps3_t = 0, now
 
             auto_done = False
             with L.lock:
@@ -408,6 +546,12 @@ def _loop(src: dict):
                         [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY])
                     if ok_b2:
                         L.latest_jpeg2 = buf2.tobytes()
+                if annotated3 is not None:
+                    ok_b3, buf3 = cv2.imencode(
+                        ".jpg", annotated3,
+                        [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY])
+                    if ok_b3:
+                        L.latest_jpeg3 = buf3.tobytes()
                 if is_file and vt is not None:
                     L.video_t = vt
                 L.fps = fps
@@ -424,6 +568,14 @@ def _loop(src: dict):
                                "view_plane": L.plane2,
                                **({"identity": ident2} if ident2 else {}),
                                **{k: v for k, v in fm2.items()
+                                  if not k.startswith("_")}}
+                if frame3 is not None:
+                    L.fps3 = fps3
+                    L.live3 = {"pose_found": bool(fm3), "fps": round(fps3, 1),
+                               "view_plane": L.plane3,
+                               "direction": L.direction3,
+                               **({"identity": ident3} if ident3 else {}),
+                               **{k: v for k, v in fm3.items()
                                   if not k.startswith("_")}}
                 if run is not None:
                     if si is not None:
@@ -451,6 +603,30 @@ def _loop(src: dict):
                     if jump:
                         row["seek_jump"] = 1
                     run["rows"].append(row)
+                    # ---- second view: own rows, own clock, analysed at finalize
+                    if frame2 is not None and fm2:
+                        if is_file2 and vt2 is not None:
+                            if run.get("t0_video2") is None:
+                                run["t0_video2"] = vt2
+                            rel2 = max(0.0, vt2 - run["t0_video2"])
+                        else:
+                            if run.get("t0_2") is None:
+                                run["t0_2"] = t_mono
+                            rel2 = t_mono - run["t0_2"]
+                        run.setdefault("rows2", []).append(
+                            {**fm2, "t_rel": float(rel2)})
+                    # ---- third view: own rows, own clock, analysed at finalize
+                    if frame3 is not None and fm3:
+                        if is_file3 and vt3 is not None:
+                            if run.get("t0_video3") is None:
+                                run["t0_video3"] = vt3
+                            rel3 = max(0.0, vt3 - run["t0_video3"])
+                        else:
+                            if run.get("t0_3") is None:
+                                run["t0_3"] = t_mono
+                            rel3 = t_mono - run["t0_3"]
+                        run.setdefault("rows3", []).append(
+                            {**fm3, "t_rel": float(rel3)})
                     latch = run.get("latch")
                     if latch is not None:
                         # store the CLEAN frame for keyframes; the skeleton is
@@ -504,10 +680,14 @@ def _loop(src: dict):
             engine.close()
         if engine2 is not None:
             engine2.close()
+        if engine3 is not None:
+            engine3.close()
         if cap is not None:
             cap.release()
         if cap2 is not None:
             cap2.release()
+        if cap3 is not None:
+            cap3.release()
         with L.lock:
             L.active = False
     # file ended while recording → finalize as complete
@@ -577,6 +757,26 @@ def video_feed2():
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
+@app.get("/video_feed3")
+def video_feed3():
+    """MJPEG stream of the optional third (front) camera."""
+    def gen():
+        try:
+            while True:
+                with L.lock:
+                    jpg = L.latest_jpeg3
+                    active = L.active
+                if jpg is None or not active:
+                    time.sleep(0.2)
+                    continue
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                       + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
+                time.sleep(1.0 / config.STREAM_FPS)
+        except GeneratorExit:
+            return
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
 def _build_state() -> dict:
     """Snapshot of the live state (shared by /api/state and the AI monitor chat)."""
     with L.lock:
@@ -589,17 +789,24 @@ def _build_state() -> dict:
             "active": L.active,
             "source": L.source_label,
             "source2": L.source2_label,
+            "source3": L.source3_label,
             "error": L.error,
             "warning2": L.warn2,
+            "warning3": L.warn3,
             "fps": round(L.fps, 1),
             "fps2": round(L.fps2, 1),
+            "fps3": round(L.fps3, 1),
             "live": L.live,
             "live2": L.live2,
+            "live3": L.live3,
             "view_plane": L.view_plane,
             "plane2": L.plane2,
+            "plane3": L.plane3,
+            "direction3": L.direction3,
             "seg": bool(L.seg),
             "seg2": bool(L.seg2),
             "has_camera2": bool(L.source2),
+            "has_camera3": bool(L.source3),
             "discipline": disc,
             "bike_type": L.bike_type,
             "playback": L.playback_state(),
@@ -710,23 +917,51 @@ def api_camera_open():
     plane2 = str(data.get("plane2") or config.DEFAULT_PLANE2).lower()
     if plane2 not in config.VIEW_PLANES:
         plane2 = config.DEFAULT_PLANE2
+    # optional simultaneous third (front) camera
+    src3 = None
+    d3 = data.get("source3") or {}
+    if d3 and d3.get("kind"):
+        s3 = _parse_source(d3)
+        if isinstance(s3, str):
+            return jsonify({"ok": False, "error": f"third camera: {s3}"}), 400
+        s3_reason = _cached_pin_reason(s3)
+        if s3_reason:
+            return jsonify({"ok": False, "error": f"third camera: {s3_reason}"}), 400
+        s3["seg"] = bool(data.get("seg3"))
+        src3 = s3
+    plane3 = str(data.get("plane3") or config.DEFAULT_PLANE3).lower()
+    if plane3 not in config.VIEW_PLANES:
+        plane3 = config.DEFAULT_PLANE3
+    direction3 = str(data.get("direction3") or config.DEFAULT_DIRECTION3).lower()
+    if direction3 not in config.DIRECTIONS:
+        direction3 = config.DEFAULT_DIRECTION3
     _close_camera()
     _finalize("stopped")
     if src2 is not None:
         src["source2"] = src2          # the capture loop opens both sources
+    if src3 is not None:
+        src["source3"] = src3          # ... and the third one when asked
 
     with L.lock:
         L.reset()
         L.source = src
         L.source_label = cameras.source_label(
-            **{k: v for k, v in src.items() if k not in ("seg", "source2")})
+            **{k: v for k, v in src.items()
+               if k not in ("seg", "source2", "source3")})
         L.source2 = src2
         L.source2_label = (cameras.source_label(
             **{k: v for k, v in src2.items() if k != "seg"})
             if src2 else "none")
+        L.source3 = src3
+        L.source3_label = (cameras.source_label(
+            **{k: v for k, v in src3.items() if k != "seg"})
+            if src3 else "none")
         L.plane2 = plane2
+        L.plane3 = plane3
+        L.direction3 = direction3
         L.seg = bool(src.get("seg"))
         L.seg2 = bool(src2 and src2.get("seg"))
+        L.seg3 = bool(src3 and src3.get("seg"))
         L.active = True
     L.thread = threading.Thread(target=_loop, args=(src,), daemon=True)
     L.thread.start()
@@ -736,7 +971,7 @@ def api_camera_open():
     if err:
         return jsonify({"ok": False, "error": err}), 500
     return jsonify({"ok": True, "source": L.source_label,
-                    "source2": L.source2_label})
+                    "source2": L.source2_label, "source3": L.source3_label})
 
 
 @app.post("/api/camera/close")
@@ -751,6 +986,12 @@ def api_camera_close():
         L.source_label = "none"
         L.live = {}
         L.latest_jpeg = None
+        L.source3 = None
+        L.source3_label = "none"
+        L.live3 = {}
+        L.latest_jpeg3 = None
+        L.fps3 = 0.0
+        L.warn3 = None
     return jsonify({"ok": True})
 
 
@@ -762,7 +1003,9 @@ def api_upload():
     if f is None or not f.filename:
         return jsonify({"ok": False, "error": "no file"}), 400
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(f.filename).name)
-    stamped = time.strftime("%Y%m%d_%H%M%S_") + safe
+    # a second upload in the same second (side + rear of the same run) must not
+    # overwrite the first: keep the timestamp readable and add a unique suffix
+    stamped = time.strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6] + "_" + safe
     dest = config.UPLOADS_DIR / stamped
     f.save(str(dest))
     mb = dest.stat().st_size / (1024 * 1024)
@@ -808,7 +1051,12 @@ def api_session_start():
     if bike_type not in config.BIKE_TYPES:
         bike_type = config.DEFAULT_BIKE_TYPE
     patient_id = STORE.upsert_patient(name, phone)
-    sid = STORE.create_session(patient_id, params, L.source_label, view_plane=plane,
+    src_label = L.source_label
+    if L.source2 and L.source2_label not in (None, "", "none"):
+        src_label = f"{src_label} + {L.source2_label}"
+    if L.source3 and L.source3_label not in (None, "", "none"):
+        src_label = f"{src_label} + {L.source3_label}"
+    sid = STORE.create_session(patient_id, params, src_label, view_plane=plane,
                                discipline=discipline,
                                bike_type=bike_type if discipline == "cycling" else None)
     latch = CY.CycleLatch() if discipline == "cycling" else GA.GaitLatch()
@@ -822,7 +1070,13 @@ def api_session_start():
                      "finalizing": False, "snap_count": 0, "last_snap": -1e9,
                      "view_plane": plane, "discipline": discipline,
                      "bike_type": bike_type, "latch": latch,
-                     "seeks": 0, "last_rel": None, "t0_video": None}
+                     "seeks": 0, "last_rel": None, "t0_video": None,
+                     "source1_label": L.source_label,
+                     "plane2": L.plane2, "source2_label": L.source2_label,
+                     "rows2": [], "t0_video2": None, "t0_2": None,
+                     "plane3": L.plane3, "direction3": L.direction3,
+                     "source3_label": L.source3_label,
+                     "rows3": [], "t0_video3": None, "t0_3": None}
         L.last_report_sid = None
     return jsonify({"ok": True, "session_id": sid, "duration": dur,
                     "view_plane": plane, "discipline": discipline,

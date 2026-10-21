@@ -231,7 +231,18 @@ CYCLING_CADENCE_HARD = (55.0, 115.0)
 # --------------------------------------------------------- second camera
 # Optional simultaneous second view (e.g. rear + side) with its own plane.
 DEFAULT_PLANE2 = "frontal"
+DEFAULT_DIRECTION2 = "rear"        # the second view is a rear (frontal) camera
 VIDEO_ASPECT_DEFAULT = 16.0 / 9.0   # assumed w/h when the source is unknown
+
+# ---------------------------------------------------------- third camera
+# Optional simultaneous third view: the FRONT camera.  It is a frontal-plane
+# view like the rear one; frontal metric math is mirror-invariant (the midline
+# comes from the pelvis itself, pelvic tilt is y-based), so "front" vs "rear"
+# is report metadata, never an axis-correction switch.
+DEFAULT_PLANE3 = "frontal"          # front camera measures the frontal plane
+DEFAULT_DIRECTION3 = "front"        # camera facing: front / rear
+DIRECTIONS = ("front", "rear")      # accepted camera-facing labels
+MAX_VIEWS = 3                       # primary + second + third; no fourth view
 
 # -------------------------------------------------- aero (frontal area)
 # Video-based projected frontal area: MediaPipe segmentation mask per frame,

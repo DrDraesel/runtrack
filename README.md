@@ -36,6 +36,14 @@ Live joint angles appear on the skeleton while running.
   joint tracking and metrics update live**, frame by frame; you can record a
   session on it. A playback bar offers **slow motion (0.25× / 0.5× / 0.75× /
   1.0×)** and frame/time **scrubbing** for close inspection.
+- **Side + rear videos (two clips)** — press **Import side + rear videos** in the
+  Camera card: the side clip becomes the sagittal source, the rear clip the
+  frontal source, and both are analysed in one session. The rear clip yields the
+  frontal metrics a side view cannot measure (pelvic drop, frontal knee collapse,
+  arm-swing symmetry) and gets its own form score + risk flags in the report;
+  each view keeps its **own time base**, so clips of different fps/length do not
+  have to be trimmed to match. The second view can also be a live camera or a
+  phone stream, and its plane is selectable (rear/front = frontal, side = sagittal).
 
 Offline analysis of a video file without the app UI:
 
@@ -43,6 +51,31 @@ Offline analysis of a video file without the app UI:
 .venv\Scripts\python.exe tools\analyze_video.py video.mp4 ^
    --start 5 --duration 60 --name "Jane" --phone 555 --weight 70 --height 175 --speed 10
 ```
+
+Two clips (side + rear) offline:
+
+```
+.venv\Scripts\python.exe tools\analyze_video.py side.mp4 --rear rear.mp4 ^
+   --plane sagittal --rear-plane frontal --duration 60 ^
+   --name "Jane" --phone 555 --weight 70 --height 175 --speed 10
+```
+
+### Three-camera setup (side + rear + front)
+
+A session can add a **front** camera as a third view (default plane `frontal`,
+direction `front`). The front clip repeats the frontal metric family — pelvic
+drop, frontal knee collapse, arm-swing symmetry — from the opposite side and
+adds an upper-body / treadmill check. The frontal maths is mirror-invariant
+(the midline comes from the pelvis, pelvic tilt is y-based), so front and rear
+need no axis correction: the direction is metadata only. Each view is analysed
+on its own time base and own plane, gets its own form score and risk flags, and
+the report shows a separate **Third view — front view (`source`)** block next to
+the second-view block. Views are reported side by side and never averaged; the
+report also prints a **Multi-view sync** line with per-view frame counts
+(software timestamps only — no hardware genlock, expect up to ~1 frame offset).
+
+Camera placement, lighting, USB/bandwidth, heterogeneous sensors and using the
+same rig for bike fitting: **[docs/MULTIVIEW-3CAM.md](docs/MULTIVIEW-3CAM.md)**.
 
 ## What is measured
 
@@ -135,9 +168,9 @@ model (~40 s) and the whole review can take 1–3 minutes.
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-209 tests: metrics + biomechanics math, 1-Euro filter, synthetic gait-cycle
+255 tests: metrics + biomechanics math, 1-Euro filter, synthetic gait-cycle
 ground-truth latching, advisor scoring/compare, storage, real-video pipeline,
-report/API endpoints.
+second-view (rear + side) analysis and report, report/API endpoints.
 
 ## Use it on another computer (camera / phone camera connected there)
 
