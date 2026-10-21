@@ -24,6 +24,27 @@ MAX_INDEX = 8
 # auto-preferred in the camera list (zero-config "just press Open camera").
 FEMTO_HINTS = ("femto", "orbbec")
 
+# Multi-pin depth cameras (Orbbec, Intel RealSense, Azure Kinect, ...) expose
+# dedicated DEPTH and IR pins next to their colour pin.  Those pins open fine
+# but carry no usable colour video — and opening some of them wedges the UVC
+# family in-process.  Classify by name; a pin whose name also says RGB/COLOR is
+# the colour pin even though its DirectShow name contains "Depth Camera".
+_RGB_PIN_HINTS = ("rgb", "color", "colour")
+
+
+def _pin_role(name) -> str | None:
+    """'depth' / 'ir' for a non-colour pin of a multi-pin depth camera, else None."""
+    n = (name or "").lower()
+    if not n.strip():
+        return None
+    if any(h in n for h in _RGB_PIN_HINTS):
+        return None
+    if "infrared" in n or re.search(r"\bir\b", n):
+        return "ir"
+    if "depth" in n:
+        return "depth"
+    return None
+
 
 def is_orbbec_femto(name) -> bool:
     n = (name or "").lower()
@@ -45,20 +66,26 @@ def preferred_camera(devices: list) -> int | None:
 def non_video_pin_reason(name) -> str | None:
     """Reason string when a UVC pin cannot provide usable colour video.
 
-    The Femto Mega Depth/IR pins open successfully but deliver no frames the
-    tracker can use, so picking one in the UI looks like "the camera is not
-    opening".  Return a user-facing explanation, or None for normal cameras.
+    Depth/IR pins of multi-pin depth cameras open successfully but deliver no
+    frames the tracker can use, so picking one in the UI looks like "the camera
+    is not opening" (and opening some of them wedges the UVC family).  Return a
+    user-facing explanation, or None for normal cameras.  Covers any brand:
+    Orbbec Femto, Intel RealSense, Azure Kinect and similar.
     """
-    n = (name or "").lower()
-    if not is_orbbec_femto(n):
+    role = _pin_role(name)
+    if role is None:
         return None
-    if "depth" in n:
-        return ("That is the Orbbec Femto Mega DEPTH pin — it carries no colour video for "
-                "pose tracking. Pick the RGB pin (marked ★ in the Camera list).")
-    if " ir " in n or "infrared" in n:
+    if is_orbbec_femto(name):
+        if role == "depth":
+            return ("That is the Orbbec Femto Mega DEPTH pin — it carries no colour video for "
+                    "pose tracking. Pick the RGB pin (marked ★ in the Camera list).")
         return ("That is the Orbbec Femto Mega IR pin — it carries no colour video. "
                 "Pick the RGB pin (marked ★ in the Camera list).")
-    return None
+    if role == "depth":
+        return ("That is the DEPTH pin of a multi-pin depth camera — it carries no colour "
+                "video for pose tracking. Pick the camera's RGB / colour pin instead.")
+    return ("That is an IR / infrared pin of a multi-pin depth camera — it carries no colour "
+            "video. Pick the camera's RGB / colour pin instead.")
 
 
 def _parse_ffmpeg_devices(text):

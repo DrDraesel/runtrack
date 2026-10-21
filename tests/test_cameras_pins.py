@@ -29,6 +29,26 @@ class TestNonVideoPinReason(unittest.TestCase):
         self.assertIsNone(cameras.non_video_pin_reason("USB2.0 HD UVC WebCam"))
         self.assertIsNone(cameras.non_video_pin_reason(""))
 
+    def test_generic_depth_pin_rejected(self):
+        reason = cameras.non_video_pin_reason("Intel(R) RealSense(TM) Depth Camera 455f Depth")
+        self.assertIsNotNone(reason)
+        self.assertIn("DEPTH", reason)
+        self.assertIn("RGB", reason)
+
+    def test_generic_ir_pin_rejected(self):
+        reason = cameras.non_video_pin_reason("Intel(R) RealSense(TM) Depth Camera 455f IR")
+        self.assertIsNotNone(reason)
+        self.assertIn("IR", reason)
+
+    def test_azure_kinect_depth_pin_rejected(self):
+        self.assertIsNotNone(cameras.non_video_pin_reason("Azure Kinect Depth Camera"))
+
+    def test_generic_rgb_pin_with_depth_in_name_passes(self):
+        # the colour pin's DirectShow name still says "Depth Camera" — it must pass
+        self.assertIsNone(cameras.non_video_pin_reason(
+            "Intel(R) RealSense(TM) Depth Camera 455f RGB"))
+        self.assertIsNone(cameras.non_video_pin_reason("Azure Kinect 4K RGB Camera"))
+
 
 class TestOpenGuard(unittest.TestCase):
     def setUp(self):
@@ -100,6 +120,35 @@ class TestScanSkipsNonVideoPins(unittest.TestCase):
         self.assertTrue(by_index[1].get("non_video"))
         self.assertIn("DEPTH", by_index[0]["non_video"])
         self.assertEqual(by_index[2]["width"], 1280)
+
+    def test_scan_skips_generic_depth_and_ir_pins(self):
+        """RealSense / Azure Kinect style multi-pin cameras: only the colour pin
+        may be opened; depth/IR pins are listed as non-video without probing."""
+        probed = []
+
+        def fake_probe(index, backend):
+            probed.append(index)
+            if index == 1:
+                return {"index": 1, "backend": "dshow", "width": 1280, "height": 720, "fps": 30.0}
+            return None
+
+        saved_names = cameras.device_names
+        saved_probe = cameras._probe_with
+        cameras.device_names = lambda: [
+            "Intel(R) RealSense(TM) Depth Camera 455f Depth",
+            "Intel(R) RealSense(TM) Depth Camera 455f RGB",
+            "Intel(R) RealSense(TM) Depth Camera 455f IR"]
+        cameras._probe_with = fake_probe
+        try:
+            found = cameras.list_usb_cameras()
+        finally:
+            cameras.device_names = saved_names
+            cameras._probe_with = saved_probe
+        self.assertEqual(probed, [1])                     # depth/IR untouched
+        by_index = {f["index"]: f for f in found}
+        self.assertTrue(by_index[0].get("non_video"))
+        self.assertTrue(by_index[2].get("non_video"))
+        self.assertEqual(by_index[1]["width"], 1280)
 
     def test_scan_still_lists_real_cameras_without_names(self):
         def fake_probe(index, backend):
