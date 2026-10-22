@@ -669,7 +669,7 @@ def _pt(lms, idx, w, h):
     return int(lms[idx, 0] * w), int(lms[idx, 1] * h)
 
 
-def _caption(img, lines, color=(255, 255, 255)):
+def _caption(img, lines, color=(255, 255, 255), scale=0.52):
     import cv2
     h, w = img.shape[:2]
     pad, lh = 8, 20
@@ -679,9 +679,27 @@ def _caption(img, lines, color=(255, 255, 255)):
     cv2.addWeighted(overlay, 0.72, img, 0.28, 0, img)
     for k, txt in enumerate(lines):
         y = h - box_h + pad + lh * k + 14
-        cv2.putText(img, txt, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(img, txt, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, color, 1, cv2.LINE_AA)
+        cv2.putText(img, txt, (10, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(img, txt, (10, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
     return img
+
+
+def _fit_scale(lines, width, hi=0.52, lo=0.34):
+    """Largest caption scale at which every line fits `width` (no clipping)."""
+    import cv2
+    scale = hi
+    while scale > lo:
+        widest = 0
+        for line in lines:
+            try:
+                (tw, _), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
+            except Exception:
+                return scale
+            widest = max(widest, tw)
+        if widest <= width - 24:
+            return scale
+        scale -= 0.03
+    return lo
 
 
 def _arrow(img, p0, p1, color, thickness=2):
@@ -883,3 +901,121 @@ def _r(v, nd=1):
     if not math.isfinite(f):
         return None
     return round(f, nd)
+
+
+# --------------------------------------------------------- session stills --
+class StillCollector:
+    """Periodic freeze-frames, independent of gait events.
+
+    Why this exists: the keyframe set is built from latched gait events, so a
+    session with no events (camera pointed at the console, upper body only,
+    too short) produced a report with ZERO pictures — exactly the sessions a
+    clinician most needs to see.  This keeps one still every ``interval_s`` of
+    session time, capped at ``max_total``; when the cap is hit the set is
+    thinned evenly and the interval doubles, so the kept stills stay spread
+    across the whole session instead of clustering at the end.
+
+    A still is captioned as a periodic still, never as a detected anomaly.
+    """
+
+    def __init__(self, interval_s=None, max_total=None):
+        self.interval = float(config.STILL_INTERVAL_S if interval_s is None else interval_s)
+        self.max_total = int(config.STILLS_MAX if max_total is None else max_total)
+        self.items = []
+        self._next = 0.0
+
+    def push(self, rel, jpeg, lms=None, fm=None) -> bool:
+        """Offer a frame; keeps it only if the interval has elapsed."""
+        if jpeg is None or self.max_total <= 0 or self.interval <= 0:
+            return False
+        try:
+            t = float(rel)
+        except (TypeError, ValueError):
+            return False
+        if t + 1e-9 < self._next:
+            return False
+        self.items.append({"t": t, "frame": jpeg, "lms": lms, "fm": dict(fm or {})})
+        self._next = t + self.interval
+        if len(self.items) > self.max_total:
+            self.interval *= 2.0
+            self.items = self.items[::2][:self.max_total]
+            self._next = (self.items[-1]["t"] if self.items else 0.0) + self.interval
+        return True
+
+    def save(self, out_dir, ctx=None) -> list:
+        """Write the kept stills; returns JSON-safe metadata (never raises)."""
+        if not self.items:
+            return []
+        if not config.STILLS_ALWAYS:
+            return []
+        return save_stills(self.items, out_dir, ctx=ctx)
+
+
+def save_stills(items, out_dir, ctx=None) -> list:
+    """Write annotated periodic stills into out_dir/keyframes/still_*.jpg.
+
+    ``ctx`` may carry session-level values for the caption (cadence_spm,
+    trunk_lean_fwd_deg, vertical_osc_norm).  The caption always says the still
+    is periodic, so nobody reads it as an anomaly freeze-frame.
+    """
+    import cv2
+    from pose_engine import draw_skeleton, overlay_angles
+    kdir = out_dir / config.KEYFRAME_DIR
+    kdir.mkdir(parents=True, exist_ok=True)
+    ctx = ctx or {}
+    meta = []
+    for n, it in enumerate(items):
+        frame = it.get("frame")
+        if frame is None:
+            continue
+        try:
+            arr = np.frombuffer(frame, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        except Exception:
+            img = None
+        if img is None:
+            continue
+        lms = _as_lms(it.get("lms"))
+        fm = it.get("fm") or {}
+        img = draw_skeleton(img, lms)
+        if lms is not None:
+            try:
+                overlay_angles(img, lms, fm)
+            except Exception:
+                pass
+        t = float(it.get("t", 0.0))
+        lines = [f"Session still (periodic) — t = {t:.1f} s"]
+        cd = _r(ctx.get("cadence_spm"), 0)
+        tl = _r(ctx.get("trunk_lean_fwd_deg"))
+        vo = _r(ctx.get("vertical_osc_norm"), 3)
+        head = []
+        if cd:
+            head.append(f"cadence {cd} spm")
+        if tl is not None:
+            head.append(f"trunk lean {tl:+.1f} deg")
+        if vo is not None:
+            head.append(f"vert osc {vo:.3f}")
+        if head:
+            lines.append(" · ".join(head))
+        kl, kr = _r(fm.get(KNEE_KEY["left"])), _r(fm.get(KNEE_KEY["right"]))
+        if kl is not None or kr is not None:
+            lines.append("knee L %s / R %s deg" % (
+                "—" if kl is None else f"{kl:.0f}", "—" if kr is None else f"{kr:.0f}"))
+        try:
+            img = _caption(img, lines,
+                           scale=_fit_scale(lines, img.shape[1]))
+        except Exception:
+            pass
+        name = f"still_{n:02d}_t{t:05.2f}.jpg".replace(" ", "0")
+        path = kdir / name
+        cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, config.STILL_JPEG_QUALITY])
+        meta.append({
+            "file": f"{config.KEYFRAME_DIR}/{name}",
+            "t": round(t, 2),
+            "label": "Session still",
+            "kind": "periodic",
+            "knee_l_deg": kl,
+            "knee_r_deg": kr,
+            "pose_found": lms is not None,
+        })
+    return meta

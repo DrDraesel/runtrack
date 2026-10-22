@@ -227,6 +227,11 @@
           from the side and one from behind (or in front). The side clip is analysed for sagittal
           metrics, the rear clip for frontal metrics (pelvic drop, knee collapse, arm swing) — both in
           one session and one report.</div>
+        <button class="big" id="btnLabRig" onclick="labRigSetup()">🎯 Lab rig — Femto side + RealSense front</button>
+        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">One click: opens the Orbbec
+          Femto Mega RGB as the <b>side</b> camera (sagittal) and the RealSense 455f RGB as the
+          <b>front</b> view (frontal), both at 1280×720, both streaming in the same session.
+          Finds them by name, so it survives index changes after a replug.</div>
         <label>Source type</label>
         <select id="camKind" onchange="kindChanged()">
           <option value="usb">USB camera (built-in / external)</option>
@@ -696,6 +701,44 @@ async function refreshCams() {
                                      && String(c.index) !== String($("usb2Index").value));
     if (free) $("usb3Index").value = free.index;
   }
+}
+
+// One-click rig: Orbbec Femto Mega RGB on the side, RealSense RGB as the front
+// view. Looks the cameras up BY NAME (indices move when a device is replugged)
+// and requests 1280x720 on both — DirectShow silently keeps its default when a
+// pin does not expose the mode, so the read-back size in /api/state wins.
+async function labRigSetup() {
+  banner("");
+  const r = await fetch("/api/cameras");
+  const d = await r.json();
+  const isRgb = c => !/depth|infrared|\bir\b/i.test(c.name || "");
+  const side = d.cameras.find(c => isRgb(c) && /orbbec|femto/i.test(c.name || ""));
+  const front = d.cameras.find(c => isRgb(c) && /realsense/i.test(c.name || ""));
+  if (!side || !front) {
+    const missing = [];
+    if (!side) missing.push("Orbbec Femto Mega RGB (side)");
+    if (!front) missing.push("RealSense RGB (front)");
+    banner("Lab rig needs: " + missing.join(" and ") + ". Found: "
+           + (d.cameras.map(c => c.name).join(", ") || "nothing") + " — plug it in and Scan.", "err");
+    return false;
+  }
+  const payload = {
+    kind: "usb", index: side.index, width: 1280, height: 720,
+    source2: {kind: "usb", index: front.index, width: 1280, height: 720},
+    plane2: "frontal"
+  };
+  const out = await jpost("/api/camera/open", payload);
+  if (!out.ok) { banner("Lab rig failed: " + out.error, "err"); return false; }
+  // reflect the rig in the form so a later Open camera / Start reuses it
+  $("camKind").value = "usb"; kindChanged();
+  $("usbIndex").value = side.index;
+  $("useCam2").checked = true;
+  $("cam2Box").style.display = "";
+  $("cam2Kind").value = "usb"; kind2Changed();
+  $("usb2Index").value = front.index;
+  setPlane2("frontal");
+  banner("Lab rig open: " + out.source + " (side) + " + out.source2 + " (front)", "ok");
+  return true;
 }
 
 function setDiscipline(p) {

@@ -497,6 +497,8 @@ def build(sid: int, store: Store) -> str:
         kdir = out_dir / config.KEYFRAME_DIR
         if kdir.exists():
             for p in sorted(kdir.glob("*.jpg")):
+                if p.name.startswith("still_"):
+                    continue          # periodic stills are not event keyframes
                 parts = p.stem.split("_")
                 kfs.append({"file": f"{config.KEYFRAME_DIR}/{p.name}",
                             "type": parts[1] if len(parts) > 1 else "?",
@@ -535,6 +537,43 @@ def build(sid: int, store: Store) -> str:
     kf_note = (not_assessed.get("gait_events")
                or ("No keyframes were captured for this session (no gait events were "
                    "latched, or the source produced no annotated frames)."))
+
+    # ---- periodic session stills: always in the report, events or not -------
+    stl = list(summary.get("stills") or [])
+    if not stl:
+        kdir = out_dir / config.KEYFRAME_DIR
+        if kdir.exists():
+            for p in sorted(kdir.glob("still_*.jpg")):
+                stl.append({"file": f"{config.KEYFRAME_DIR}/{p.name}",
+                            "label": "Session still", "kind": "periodic", "t": None})
+    if not stl:
+        # last resort for sessions recorded before stills existed: the three
+        # live HUD snapshots the capture loop already stored
+        for p in sorted(out_dir.glob("frame_*.jpg")):
+            stl.append({"file": p.name, "label": "Session snapshot (live HUD)",
+                        "kind": "snapshot", "t": None})
+    stl_html = ""
+    for s in stl:
+        cap = [esc(s.get("label") or "Session still")]
+        tval = s.get("t")
+        if tval is not None:
+            try:
+                cap.append("t = %.2f s" % float(tval))
+            except (TypeError, ValueError):
+                pass
+        bits = []
+        if s.get("knee_l_deg") is not None:
+            bits.append("knee L %.0f°" % float(s["knee_l_deg"]))
+        if s.get("knee_r_deg") is not None:
+            bits.append("knee R %.0f°" % float(s["knee_r_deg"]))
+        if s.get("pose_found") is False:
+            bits.append("no pose in this frame")
+        stl_html += ('<figure class="kf"><img src="%s" alt="%s">'
+                     '<figcaption>%s<br><span class="muted">%s</span></figcaption></figure>'
+                     % (esc(s.get("file")), esc(" · ".join(cap)),
+                        esc(" · ".join(cap)), esc(", ".join(bits))))
+    stl_note = ("No periodic stills were stored for this session — older session, or the "
+                "still grabber could not run. Re-record to get pictures in the report.")
 
     labels = "".join(f"<li>{esc(x)}</li>" for x in summary.get("labels", []))
     chart_imgs = "".join(
@@ -983,6 +1022,10 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
 
 <h2>Gait event keyframes ({len(kfs)})</h2>
 {('<div class="kfgrid">' + kf_html + '</div>') if kf_html else '<p class="muted">' + esc(kf_note) + '</p>'}
+
+<h2>Session stills ({len(stl)})</h2>
+<p class="muted">Periodic freeze-frames kept every ~{esc(config.STILL_INTERVAL_S)} s of session time. They are stored whether or not a gait event latched, so the printed report always shows the runner and the camera framing (sessions recorded before this feature show the three live HUD snapshots instead). They are <b>not</b> anomaly detections — event keyframes above carry the flagged geometry.</p>
+{('<div class="kfgrid">' + stl_html + '</div>') if stl_html else '<p class="muted">' + esc(stl_note) + '</p>'}
 
 {phases_section}
 

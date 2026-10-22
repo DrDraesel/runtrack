@@ -268,6 +268,16 @@ def _finalize(reason="complete"):
                         ref[0].close()
                     except Exception:
                         pass
+        # periodic stills — written even when the keyframe set is empty, so a
+        # session with bad framing still yields printable evidence
+        summary["stills"] = []
+        _st = sess.get("stills") if isinstance(sess, dict) else None
+        if _st is not None:
+            try:
+                summary["stills"] = _st.save(config.SESSIONS_DIR / str(sid),
+                                             ctx=summary)
+            except Exception as e:
+                summary.setdefault("labels", []).append(f"session stills failed: {e}")
         if seeks:
             summary.setdefault("labels", []).append(
                 f"video playback was scrubbed during this session "
@@ -687,6 +697,14 @@ def _loop(src: dict):
                                 new_evs = latch.push(rel, fm, clean_jpeg, lms)
                             except Exception:
                                 new_evs = []
+                        # periodic stills: independent of events, so the report
+                        # always shows the session even with zero latched events
+                        stills = run.get("stills")
+                        if stills is not None and clean_jpeg is not None:
+                            try:
+                                stills.push(rel, clean_jpeg, lms, fm)
+                            except Exception:
+                                pass
                         for ev in new_evs:
                             try:
                                 # HD crop only for events with usable metrics
@@ -935,7 +953,15 @@ def api_camera_open():
     def _parse_source(d, field="kind"):
         k = d.get(field)
         if k == "usb":
-            return {"kind": "usb", "index": int(d.get("index", 0))}
+            src = {"kind": "usb", "index": int(d.get("index", 0))}
+            # optional capture-size request (DirectShow may ignore it)
+            try:
+                w, h = int(d.get("width") or 0), int(d.get("height") or 0)
+            except (TypeError, ValueError):
+                w = h = 0
+            if 160 <= w <= 4096 and 120 <= h <= 2160:
+                src["width"], src["height"] = w, h
+            return src
         if k == "url":
             url = (d.get("url") or "").strip()
             if not url:
@@ -1123,6 +1149,8 @@ def api_session_start():
                      "finalizing": False, "snap_count": 0, "last_snap": -1e9,
                      "view_plane": plane, "discipline": discipline,
                      "bike_type": bike_type, "latch": latch,
+                     # periodic stills: prove the report always has pictures
+                     "stills": GA.StillCollector(),
                      "aspect": L.aspect,
                      "seeks": 0, "last_rel": None, "t0_video": None,
                      "source1_label": L.source_label,

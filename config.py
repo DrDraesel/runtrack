@@ -105,6 +105,15 @@ KEYFRAME_CROP_PAD = 0.12       # bbox padding (share of span) for the HD crop
 # loop is not affected.
 REFINE_KEYFRAMES = True
 
+# Session stills: periodic freeze-frames stored while a session records, so the
+# report/PDF ALWAYS carries pictures of the session — even when no gait event
+# latches (bad framing, upper-body-only clip, short session).  They are labelled
+# as periodic stills, never as detected anomalies.
+STILLS_ALWAYS = True           # write stills even when the keyframe set is empty
+STILL_INTERVAL_S = 5.0         # seconds of session time between kept stills
+STILLS_MAX = 6                 # kept per session; thinned evenly when exceeded
+STILL_JPEG_QUALITY = 88        # written stills (the stored capture uses KEYFRAME_JPEG_QUALITY)
+
 # ------------------------------------------------------- side identity
 # Undo MediaPipe left/right label flips per limb branch (legs, arms) and
 # report a side whose key joints are hidden (see side_identity.py).

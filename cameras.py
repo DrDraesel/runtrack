@@ -256,13 +256,19 @@ def _scan_without_names(max_index: int):
 
 
 def open_source(kind: str, index: int | None = None, url: str | None = None,
-                path: str | None = None, attempts: int = 5, settle: float = 0.7):
+                path: str | None = None, attempts: int = 5, settle: float = 0.7,
+                width: int | None = None, height: int | None = None):
     """Open a capture source. Returns cv2.VideoCapture or None.
 
     USB opens are retried: DirectShow can refuse a camera that was released
     moments ago (previous owner still tearing down), which used to leave the
     app stuck on "could not open source" until a page reload.  A capture is
     only accepted once it has delivered one real frame.
+
+    ``width``/``height`` are a REQUEST, not a guarantee: DirectShow ignores
+    modes the pin does not expose, so callers must read back the real frame
+    size.  Set before the first read — setting after frames start is ignored
+    by some drivers.
     """
     if kind == "usb":
         for attempt in range(attempts):
@@ -273,6 +279,9 @@ def open_source(kind: str, index: int | None = None, url: str | None = None,
                     cap = None
                 if cap and cap.isOpened():
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+                    if width and height:
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
                     ok, frame = False, None
                     try:
                         for _ in range(6):
@@ -302,7 +311,9 @@ def open_source(kind: str, index: int | None = None, url: str | None = None,
     return None
 
 
-def source_label(kind: str, index=None, url=None, path=None) -> str:
+def source_label(kind: str, index=None, url=None, path=None, **_ignored) -> str:
+    """Human label for a source.  Tolerates extra source keys (width/height)
+    so callers can splat a parsed payload straight in."""
     if kind == "usb":
         return f"USB camera {index}"
     if kind == "url":
