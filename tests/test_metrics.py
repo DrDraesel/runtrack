@@ -59,6 +59,23 @@ class TestFrameMetrics(unittest.TestCase):
         self.assertIn("trunk_lean", fm)
         self.assertLess(abs(fm["trunk_lean"]), 30.0)
 
+    def test_aspect_correction_restores_true_angle(self):
+        # A 45-degree knee flexion (included 135) in a 16:9 frame.  Raw
+        # normalised x is compressed by 16/9, which used to read ~151 deg.
+        aspect = 16.0 / 9.0
+        pose = self._standing_pose()
+        pose[23] = (0.50, 0.50, 1.0)                       # hip above knee
+        pose[25] = (0.50, 0.60, 1.0)                       # knee
+        pose[27] = (0.50 + 0.10 / aspect, 0.70, 1.0)       # ankle down-right
+        raw = M.frame_metrics(_lms(pose))
+        fixed = M.frame_metrics(_lms(pose), aspect=aspect)
+        self.assertAlmostEqual(fixed["left_knee"], 135.0, delta=1.0)
+        self.assertGreater(raw["left_knee"], 145.0)
+
+    def test_square_frame_aspect_is_unchanged(self):
+        pose = _lms(self._standing_pose())
+        self.assertEqual(M.frame_metrics(pose), M.frame_metrics(pose, aspect=1.0))
+
     def test_none_frame(self):
         self.assertEqual(M.frame_metrics(None), {})
 

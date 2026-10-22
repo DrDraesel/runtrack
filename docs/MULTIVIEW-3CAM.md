@@ -179,7 +179,7 @@ The same three cameras serve bike fitting; the metric set already exists in
 | **REAR** | hip rocking (pelvic obliquity), knee tracking (lateral travel), shoulder/ankle control | pelvic obliquity ≤ 5°; knee lateral travel avg ≤ 40 mm / good ≤ 20 mm (peak-to-peak) |
 | **FRONT** | left-right knee symmetry, arm position, that the console does not hide the legs | read as left/right agreement, no separate band |
 
-Change one fit dimension at a time, **3–5 mm per step**, and re-film. The rear
+Change one fit dimension at a time, **10 mm per step** (5 mm is below 2-D resolution), and re-film. The rear
 travel numbers are peak-to-peak excursions relative to a rolling mean — treat
 them as control indicators, not laboratory kinematics.
 

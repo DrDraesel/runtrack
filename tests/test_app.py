@@ -1,4 +1,5 @@
 """API surface tests for the RunTrack Flask app (no camera required)."""
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -51,6 +52,40 @@ class TestApp(unittest.TestCase):
         r = self.c.get("/api/sessions")
         self.assertEqual(r.status_code, 200)
         self.assertIn("sessions", r.get_json())
+
+    def test_cycling_fit_ui_is_present(self):
+        html = self.c.get("/").get_data(as_text=True)
+        self.assertIn("cycFitCard", html)
+        self.assertIn("Knee at BDC", html)
+        self.assertIn("updateCyclingFit", html)
+        self.assertIn("AI fit review is in the session report", html)
+
+    def test_state_reports_bike_live_slot(self):
+        d = self.c.get("/api/state").get_json()
+        self.assertIn("bike_live", d)
+        self.assertIsNone(d["bike_live"])          # idle: never invented
+        self.assertIn("bike_type", d)
+
+    def test_live_bike_returns_a_rolling_tt_fit(self):
+        rows = []
+        for i in range(300):
+            tt = i / 30.0
+            rows.append({"t_rel": tt,
+                         "left_knee": 120.0 + 22.0 * math.cos(2 * math.pi * 1.5 * tt),
+                         "right_knee": 120.0 + 22.0 * math.cos(2 * math.pi * 1.5 * tt + 0.4),
+                         "left_hip": 70.0 + 10.0 * math.cos(2 * math.pi * 1.5 * tt),
+                         "right_hip": 70.0 + 10.0 * math.cos(2 * math.pi * 1.5 * tt + 0.4),
+                         "left_elbow": 95.0, "right_elbow": 95.0,
+                         "trunk_lean": 70.0})
+        appmod.L.bike_type = "tt"
+        fit = appmod._live_bike({"rows": rows}, "cycling", True)
+        self.assertIsNotNone(fit)
+        self.assertGreater(fit["n_frames"], 100)
+        self.assertGreater(fit["knee_bdc_deg"], 135.0)
+        self.assertLess(fit["knee_tdc_deg"], 105.0)
+        self.assertIn("knee_bdc_deg", fit["targets"])
+        self.assertIsNone(appmod._live_bike({"rows": rows}, "running", True))
+        self.assertIsNone(appmod._live_bike({"rows": rows}, "cycling", False))
 
     def test_foreign_host_rejected(self):
         r = self.c.post("/api/camera/close", headers={"Host": "evil.example.com"})

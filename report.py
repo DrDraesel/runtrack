@@ -487,8 +487,16 @@ async function runCoach() {{
 <table><tr><th>Metric</th><th>Value</th><th>Target ({esc(bike_type)})</th><th>Status</th></tr>
 {bike_rows or '<tr><td colspan="4">No cycling metrics were tracked — film a steady '
               'side view with both legs visible.</td></tr>'}</table>
-{"<div class='drill'><b>Fit adjustments to try (change 3-5 mm at a time and re-film)</b><ul>" + bike_sug_html + "</ul></div>" if bike_sug_html else ""}
+{"<div class='drill'><b>Fit adjustments to try (change 10 mm at a time and re-film; 5 mm is below measurement resolution)</b><ul>" + bike_sug_html + "</ul></div>" if bike_sug_html else ""}
 <p class="muted" style="font-size:12px">{esc(CY.BIKE_NOTES)}</p>"""
+        if bike_type in ("tt", "tri"):
+            bike_section += f"""
+<p class="muted" style="font-size:12px"><b>TT/tri notes:</b> the aerobar elbow band is
+85-105 deg (elbows bent, not locked); the torso band is
+{esc(str(config.CYCLING_BANDS['torso_deg'][bike_type]))} deg vs horizontal. Saddle setback /
+KOPS cannot be measured without the bottom-bracket position, and hip rocking needs the rear
+camera — neither is inferred from this side view. Frontal area is a relative comparator on the
+same camera setup, not CdA and not a wind-tunnel result.</p>"""
 
     # rear-view control table
     rear_order = ["pelvic_obliquity_deg", "hip_vertical_travel", "hip_horizontal_travel",
@@ -666,9 +674,9 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
                                 f"({esc(prev.get('started_ts'))}):</b> "
                                 f"{pa['fa_m2_median']:g} → {aero['fa_m2_median']:g} m² "
                                 f"({dd['delta_area_pct']:+.1f} %)".replace("{", "").replace("}", "")
-                                + (f", ≈ {dd['watts_delta_est']:+.1f} W aero drag at "
+                                + (f", scenario estimate {dd['watts_delta_est']:+.1f} W at "
                                    f"{dd.get('speed_kmh', 40):g} km/h (Cd "
-                                   f"{dd.get('cd_assumed', config.AERO_CD_DEFAULT):g}, estimate)"
+                                   f"{dd.get('cd_assumed', config.AERO_CD_DEFAULT):g} — NOT a measured watt saving)"
                                    if dd.get("watts_delta_est") is not None else "")
                                 + ")</p>")
                         break
@@ -884,10 +892,10 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
 <h2>Notes &amp; limits</h2>
 <ul class="labels">
  <li>Reference bands are heuristics from common running-gait literature for recreational runners — not clinical norms.</li>
- {("<li>Cycling: fit bands follow accepted cycling-fit practice/industry guides (Velogic Studio triathlon metrics, Holmes method knee angles, tri/TT torso conventions) and the front camera measures the projected frontal area from the pose-model silhouette — an index, not a drag-coefficient measurement. Bike-fit changes are 3-5 mm steps at most, re-film to compare.</li>" if discipline == "cycling" else "")}
+ {("<li>Cycling: fit bands follow video-fit practice (dynamic 2-D knee at BDC, Velogic/MyVeloFit style metrics, TT/tri convention) — they are not clinical norms. The front camera measures a projected-area index, not CdA. Use 10 mm fit steps (5 mm is below 2-D resolution) and re-film; 2-D angles carry a 3-9 deg markerless error and a ~2 deg bias vs 3-D, so never compare absolute degrees across camera setups. Evidence: research/CYCLING-TT-FIT-EVIDENCE.md.</li>" if discipline == "cycling" else "")}
  {("<li>Second camera: rear-view numbers are peak-to-peak excursions of landmarks relative to a rolling mean (the rider/athlete shifts on the machine over a set). Treat them as relative control indicators, not laboratory kinematics.</li>" if rear else "")}
  {("<li>Third view: the front clip is analysed on its own time base and its own plane; the report lists all views side by side and never averages them. Front and rear are the same frontal metric family (direction is metadata only), and the clips share only a software clock — no hardware genlock, so expect up to ~1 frame of offset.</li>" if sv3 else "")}
- {("<li>Aero: frontal area in m² needs height or shoulder width; the watts estimate assumes the drag coefficient is unchanged between sessions.</li>" if aero else "")}
+ {("<li>Aero: frontal area in m² needs height or shoulder width. The watt figure is a scenario estimate with an assumed Cd — it is NOT a measured saving and must not be presented as one.</li>" if aero else "")}
  <li>Angles are 2D, from a single camera view. Sagittal metrics need a side view, frontal metrics need a front/back view; the other plane is reported as “{esc(config.NOT_ASSESSED_TEXT)}” instead of a number.</li>
  <li>Overstride in centimetres is a height-based estimate (leg length ≈ {config.LEG_LENGTH_HEIGHT_FRACTION} × height), not a measured length.</li>
  <li>Left/right labels follow MediaPipe's convention; verify orientation against the camera view.</li>

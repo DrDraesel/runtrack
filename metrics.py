@@ -157,11 +157,27 @@ def pelvic_tilt_deg(l_hip, r_hip) -> float | None:
     return math.degrees(math.atan2(dy, dx))
 
 
-def frame_metrics(lms) -> dict:
-    """Compute all per-frame metrics from (33,4) landmarks. None-safe."""
+def frame_metrics(lms, aspect: float = 1.0) -> dict:
+    """Compute all per-frame metrics from (33,4) landmarks. None-safe.
+
+    ``aspect`` is frame width / height.  MediaPipe x and y are both
+    normalised 0..1 but span different pixel distances, so an angle from raw
+    coordinates is anisotropic: a true 45 deg knee reads ~29 deg on 16:9.
+    Scaling x by the aspect makes every distance and angle isotropic.  The
+    default 1.0 preserves square-frame behaviour for existing callers/tests.
+    """
     fm: dict = {}
     if lms is None:
         return fm
+    try:
+        aspect = float(aspect)
+    except (TypeError, ValueError):
+        aspect = 1.0
+    if math.isfinite(aspect) and aspect > 0 and abs(aspect - 1.0) > 1e-9:
+        # Copy: never mutate the caller's landmarks (they are also used for
+        # drawing, keyframes and the side-identity tracker).
+        lms = lms.copy()
+        lms[:, 0] = lms[:, 0].astype(float) * aspect
 
     for name, (a, b, c) in JOINT_SPECS.items():
         if _vis(lms, a) and _vis(lms, b) and _vis(lms, c):

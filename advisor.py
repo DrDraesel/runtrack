@@ -236,20 +236,20 @@ CYCLING_WEIGHTS = {
 
 CYCLING_DRILLS = {
     "knee_bdc_high": [
-        "Lower the saddle 3-5 mm, re-film at the same camera position, re-measure "
+        "Lower the saddle 10 mm, re-film at the same camera position, re-measure "
         "the knee angle at the bottom of the stroke",
         "Check for hip rocking in the rear-view recording at the same effort — "
         "reaching for the pedal is a classic too-high-saddle sign",
     ],
     "knee_bdc_low": [
-        "Raise the saddle 3-5 mm at a time; low saddles compress the knee at the "
+        "Raise the saddle 10 mm at a time; low saddles compress the knee at the "
         "top of the stroke",
         "If the target angle still needs more height, check crank length and shoe "
         "stack before raising the saddle beyond the seatpost limit",
     ],
     "hip_tdc_low": [
         "Open the hip: consider shorter cranks, raise the front end 10 mm, or move "
-        "the saddle back 3-5 mm (re-check reach afterwards)",
+        "the saddle back 10 mm (re-check reach afterwards)",
         "Hip flexor mobility work 3 x 30 s per side before sessions",
     ],
     "obliquity": [

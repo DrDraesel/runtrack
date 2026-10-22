@@ -169,7 +169,7 @@
             {% for bt in bike_types %}<button class="ghost" id="btnBt-{{ bt }}" onclick="setBikeType('{{ bt }}')">{{ bt|upper }}</button>{% endfor %}
           </div>
           <div class="row">
-            <div><label>Assumed Cd (aero watts estimate)</label><input id="pcd" type="number" step="0.05" value="0.80"></div>
+            <div><label>Assumed Cd (scenario only, not measured)</label><input id="pcd" type="number" step="0.05" value="0.80"></div>
             <div><label>Saddle height (cm, optional)</label><input id="psaddle" type="number" step="0.5" placeholder="e.g. 73"></div>
           </div>
           <div class="muted" style="margin-top:6px">Aerobars for TT/tri: film the side view on the extensions.
@@ -392,6 +392,22 @@
           The selected view plane decides which metric family is assessed — the other family shows
           “not assessed (wrong camera view)” instead of a number.
           Joint angles are drawn on the skeleton in the live view.</div>
+      </div>
+
+      <div class="card" id="cycFitCard" style="display:none">
+        <h2>Cycling fit — <span id="cycBikeType">road</span> position</h2>
+        <div class="metrics">
+          <div class="m"><div class="k">Knee at BDC</div><div class="v" id="cycKnee">–</div><div class="u" id="cycKneeT">target –</div></div>
+          <div class="m"><div class="k">Knee at TDC</div><div class="v" id="cycKneeTdc">–</div><div class="u" id="cycKneeTdcT">target –</div></div>
+          <div class="m"><div class="k">Hip at TDC</div><div class="v" id="cycHip">–</div><div class="u" id="cycHipT">target –</div></div>
+          <div class="m"><div class="k">Torso vs horizontal</div><div class="v" id="cycTorso">–</div><div class="u" id="cycTorsoT">target –</div></div>
+          <div class="m"><div class="k">Elbow</div><div class="v" id="cycElbow">–</div><div class="u" id="cycElbowT">target –</div></div>
+          <div class="m"><div class="k">Cadence</div><div class="v" id="cycCad">–</div><div class="u">rolling estimate</div></div>
+        </div>
+        <div class="muted" id="cycStatus" style="margin-top:8px">Waiting for 5 s of pedalling…</div>
+        <div class="muted" style="margin-top:4px;font-size:11.5px">Live values are a rolling 5 s
+          estimate; the saved report uses per-revolution BDC/TDC keyframes. Targets are industry
+          video-fit guidance (not clinical norms). AI fit review is in the session report.</div>
       </div>
     </div>
 
@@ -1214,6 +1230,49 @@ function updateBigNumbers(live, cad, d) {
   $("bn_valgus").textContent = signed(live.knee_valgus_l, "", 1) + " / " + signed(live.knee_valgus_r, "", 1);
 }
 
+function bandText(b) {
+  return (Array.isArray(b) && b.length === 2) ? (b[0] + "–" + b[1]) : "–";
+}
+function setCyc(id, value, unit, band, decimals) {
+  const el = $(id);
+  if (!el) return;
+  const v = Number(value);
+  if (value === null || value === undefined || !isFinite(v)) {
+    el.textContent = "–"; el.className = "v"; return;
+  }
+  el.textContent = v.toFixed(decimals || 0) + (unit || "");
+  const inBand = Array.isArray(band) && v >= band[0] && v <= band[1];
+  el.className = "v " + (inBand ? "ok" : "bad");
+}
+function updateCyclingFit(d, disc) {
+  const card = $("cycFitCard");
+  if (!card) return;
+  card.style.display = disc === "cycling" ? "" : "none";
+  if (disc !== "cycling") return;
+  const bl = d.bike_live || {};
+  const tg = bl.targets || {};
+  $("cycBikeType").textContent = (d.bike_type || "road").toUpperCase();
+  setCyc("cycKnee", bl.knee_bdc_deg, "°", tg.knee_bdc_deg, 0);
+  $("cycKneeT").textContent = "BDC target " + bandText(tg.knee_bdc_deg);
+  setCyc("cycKneeTdc", bl.knee_tdc_deg, "°", tg.knee_tdc_deg, 0);
+  const tdcFloor = Array.isArray(tg.knee_tdc_deg) ? tg.knee_tdc_deg[0] : 68;
+  $("cycKneeTdcT").textContent = "floor ≥" + tdcFloor + "°";
+  setCyc("cycHip", bl.hip_tdc_deg, "°", tg.hip_tdc_deg, 0);
+  $("cycHipT").textContent = "target " + bandText(tg.hip_tdc_deg);
+  setCyc("cycTorso", bl.torso_deg, "°", tg.torso_deg, 0);
+  $("cycTorsoT").textContent = "target " + bandText(tg.torso_deg);
+  setCyc("cycElbow", bl.elbow_deg, "°", tg.elbow_deg, 0);
+  $("cycElbowT").textContent = "target " + bandText(tg.elbow_deg);
+  const cad = Number(bl.cadence_rpm);
+  $("cycCad").textContent = isFinite(cad) && bl.cadence_rpm !== null
+    ? cad.toFixed(0) + " rpm" : "–";
+  $("cycCad").className = "v";
+  $("cycStatus").textContent = bl.n_frames
+    ? ("rolling " + (bl.window_s || 5) + " s · " + bl.n_frames + " frames"
+       + (bl.cadence_rpm ? " · " + Number(bl.cadence_rpm).toFixed(0) + " rpm" : ""))
+    : "Waiting for 5 s of pedalling…";
+}
+
 async function poll() {
   let d;
   try { d = await (await fetch("/api/state")).json(); } catch (e) { return; }
@@ -1226,6 +1285,7 @@ async function poll() {
   lastDisc = disc;
   const btype = (d.session && d.session.bike_type) || d.bike_type || "";
   $("discPill").textContent = "discipline: " + disc + (disc === "cycling" && btype ? " (" + btype + ")" : "");
+  updateCyclingFit(d, disc);
   // second camera (rear / frontal view) — live feed + fps
   (function () {
     const pill = $("cam2Pill"), note = $("feed2note"), img = $("feed2");

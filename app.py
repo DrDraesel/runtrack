@@ -33,8 +33,8 @@ import metrics as M
 import report as R
 import second_view as SV
 from filters import LandmarkFilter
-from pose_engine import (PoseEngine, draw_skeleton, make_crop_refiner,
-                         overlay_angles, person_crop_box)
+from pose_engine import (PoseEngine, draw_cycling_overlay, draw_skeleton,
+                         make_crop_refiner, overlay_angles, person_crop_box)
 from session_store import Store
 from side_identity import SideIdentity
 
@@ -88,6 +88,7 @@ class Live:
         self.seek_t = None
         self.video_t = 0.0
         self.media = {}
+        self.aspect = 16.0 / 9.0        # last processed frame width / height
 
     def reset(self):
         self.stop_evt = threading.Event()
@@ -184,6 +185,9 @@ def _finalize(reason="complete"):
         sid = sess["id"]
         rows = list(sess["rows"])
         params = dict(sess["params"])
+        # Rear-view mm scaling and any aspect-sensitive analysis use the
+        # actual capture aspect, not an assumed 16:9.
+        params["aspect"] = sess.get("aspect") or config.VIDEO_ASPECT_DEFAULT
         elapsed = sess.get("elapsed", 0.0)
         plane = sess.get("view_plane") or config.DEFAULT_VIEW_PLANE
         latch = sess.get("latch")
@@ -212,6 +216,32 @@ def _finalize(reason="complete"):
                                     view_plane=plane, events=events,
                                     discipline=discipline)
         CY.enrich(summary, rows, params, bike_type=bike_type, discipline=discipline)
+        if discipline == "cycling":
+            # The rear/front cameras are separate row streams: primary rows do
+            # not carry the r_ keys, so enrich() alone can never see them.
+            if rows2 and str(plane2).lower() == "frontal":
+                try:
+                    rear2 = CY.analyze_rear(rows2, params, prefix="")
+                except Exception as e:
+                    rear2 = None
+                    summary.setdefault("labels", []).append(
+                        f"cycling rear view analysis failed: {e}")
+                if rear2:
+                    rear2["camera"] = "second camera"
+                    summary["rear"] = rear2
+            if rows3 and str(plane3).lower() == "frontal":
+                try:
+                    aero3 = CY.frontal_area(rows3, params, prefix="")
+                except Exception as e:
+                    aero3 = None
+                    summary.setdefault("labels", []).append(
+                        f"cycling front view aero analysis failed: {e}")
+                if aero3:
+                    aero3["camera"] = "third camera"
+                    speed = params.get("speed_kmh")
+                    aero3["speed_kmh"] = float(speed) if speed else None
+                    aero3["cd_assumed"] = float(params.get("cd_est") or config.AERO_CD_DEFAULT)
+                    summary["aero"] = aero3
         if side_id is not None:
             try:
                 summary["side_identity"] = side_id.info()
@@ -222,7 +252,7 @@ def _finalize(reason="complete"):
             ref = None
             refine = None
             try:
-                ref = make_crop_refiner()      # heavy model, IMAGE mode
+                ref = make_crop_refiner(aspect=sess.get("aspect"))  # heavy model, IMAGE mode
                 refine = ref[1] if ref else None
             except Exception:
                 ref = None                     # no HD pass — keyframes still saved
@@ -465,6 +495,7 @@ def _loop(src: dict):
             scale = config.PROC_WIDTH / w if w > config.PROC_WIDTH else 1.0
             proc = cv2.resize(frame, None, fx=scale, fy=scale) if scale != 1.0 else frame
             t_mono = time.monotonic()
+            L.aspect = proc.shape[1] / proc.shape[0]
             lms_raw = engine.detect(proc, int(t_mono * 1000))
             # left/right identity stays pinned across label flips (legs + arms)
             ident = None
@@ -473,11 +504,18 @@ def _loop(src: dict):
             # 1-Euro smoothing before metric computation; raw landmarks are kept
             # in the keyframe buffer for event detection / re-analysis
             lms = lf(lms_raw, t_mono) if lms_raw is not None else None
-            fm = M.frame_metrics(lms)
+            fm = M.frame_metrics(lms, aspect=proc.shape[1] / proc.shape[0])
             if src.get("seg") and engine.seg_frac is not None:
                 fm["fa_frac"] = engine.seg_frac
             annotated = draw_skeleton(proc.copy(), lms)
             overlay_angles(annotated, lms, fm)
+            _disc = str((L.session or {}).get("discipline")
+                        or L.discipline or "running").lower()
+            if _disc == "cycling":
+                draw_cycling_overlay(
+                    annotated, lms, fm,
+                    bike_type=str((L.session or {}).get("bike_type")
+                                  or L.bike_type or "road"))
 
             # ---- second camera: detect + metrics + its own annotated frame
             fm2, ident2, annotated2, lms2 = {}, None, None, None
@@ -490,7 +528,7 @@ def _loop(src: dict):
                 if si2 is not None:
                     lms_raw2, ident2 = si2.update(lms_raw2, t_mono)
                 lms2 = lf2(lms_raw2, t_mono) if lms_raw2 is not None else None
-                fm2 = M.frame_metrics(lms2)
+                fm2 = M.frame_metrics(lms2, aspect=proc2.shape[1] / proc2.shape[0])
                 if src2.get("seg") and engine2.seg_frac is not None:
                     fm2["fa_frac"] = engine2.seg_frac
                 annotated2 = draw_skeleton(proc2.copy(), lms2)
@@ -507,7 +545,7 @@ def _loop(src: dict):
                 if si3 is not None:
                     lms_raw3, ident3 = si3.update(lms_raw3, t_mono)
                 lms3 = lf3(lms_raw3, t_mono) if lms_raw3 is not None else None
-                fm3 = M.frame_metrics(lms3)
+                fm3 = M.frame_metrics(lms3, aspect=proc3.shape[1] / proc3.shape[0])
                 if src3.get("seg") and engine3.seg_frac is not None:
                     fm3["fa_frac"] = engine3.seg_frac
                 annotated3 = draw_skeleton(proc3.copy(), lms3)
@@ -777,6 +815,19 @@ def video_feed3():
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
+def _live_bike(sess, disc, run):
+    """Rolling 5 s bike-fit estimate for the live UI (never raises)."""
+    if not (disc == "cycling" and sess and run):
+        return None
+    fn = getattr(CY, "live_fit", None)
+    if fn is None:
+        return None
+    try:
+        return fn(sess.get("rows") or [], L.bike_type or config.DEFAULT_BIKE_TYPE)
+    except Exception:
+        return None
+
+
 def _build_state() -> dict:
     """Snapshot of the live state (shared by /api/state and the AI monitor chat)."""
     with L.lock:
@@ -809,6 +860,7 @@ def _build_state() -> dict:
             "has_camera3": bool(L.source3),
             "discipline": disc,
             "bike_type": L.bike_type,
+            "bike_live": _live_bike(sess, disc, run),
             "playback": L.playback_state(),
             "media": dict(L.media or {}),
             "session": None if not (sess and run) else {
@@ -1070,6 +1122,7 @@ def api_session_start():
                      "finalizing": False, "snap_count": 0, "last_snap": -1e9,
                      "view_plane": plane, "discipline": discipline,
                      "bike_type": bike_type, "latch": latch,
+                     "aspect": L.aspect,
                      "seeks": 0, "last_rel": None, "t0_video": None,
                      "source1_label": L.source_label,
                      "plane2": L.plane2, "source2_label": L.source2_label,
@@ -1282,8 +1335,11 @@ def api_coach(sid: int):
             "(side camera for angles, optional second camera for rear-view control, "
             "front-camera frontal area for aero) and up to 3 frames. Give concise, "
             "structured feedback: (1) position strengths, (2) fit adjustments to try "
-            "with directions (saddle up/down, front end, reach), (3) one aero comment "
-            "if frontal-area data is present, (4) one caveat about the data limits. "
+            "with directions (saddle up/down, front end, reach, aerobar pad stack/reach), "
+            "(3) one aero comment if frontal-area data is present, (4) one caveat about "
+            "the data limits. Use ONLY the target bands in 'fit_targets' - never invent "
+            "different norms or cite values that are not in the data. For tt/tri, comment "
+            "on the aerobar elbow angle and torso angle. Change one thing 10 mm at a time. "
             "120-200 words. Do not diagnose injuries. Values listed under 'not_assessed' "
             "were NOT measured - never comment on them.\n\nSummary JSON:\n"
             + json.dumps({"discipline": disc, "bike_type": bt,
@@ -1293,6 +1349,10 @@ def api_coach(sid: int):
                           "knee_tdc_min_deg": bike.get("knee_tdc_min_deg"),
                           "hip_tdc_min_deg": bike.get("hip_tdc_min_deg"),
                           "torso_deg": bike.get("torso_deg"),
+                          "elbow_deg": bike.get("elbow_deg"),
+                          "shoulder_deg": bike.get("shoulder_deg"),
+                          "fit_targets": (CY.fit_targets(bt) if hasattr(CY, "fit_targets")
+                                          else None),
                           "per_side": bike.get("per_side"),
                           "form": bike.get("form"),
                           "suggestions": bike.get("suggestions"),

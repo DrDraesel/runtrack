@@ -77,11 +77,32 @@ report also prints a **Multi-view sync** line with per-view frame counts
 Camera placement, lighting, USB/bandwidth, heterogeneous sensors and using the
 same rig for bike fitting: **[docs/MULTIVIEW-3CAM.md](docs/MULTIVIEW-3CAM.md)**.
 
+## Cycling / TT / triathlon fit
+
+Choose **Cycling** and a bike type (**road / TT / triathlon**) when starting a
+session. The side camera measures knee at BDC/TDC, hip at TDC, torso vs
+horizontal, ankle, elbow and cadence; the live view draws hip-knee-ankle,
+torso and arm tracking lines, a plumb/horizontal reference, and target-aware
+angle labels (green inside the selected band, amber outside). The live panel
+is a rolling 5 s estimate; the report uses per-revolution BDC/TDC keyframes.
+The rear camera adds hip rocking / pelvic obliquity and knee travel; the front
+camera adds a fractional frontal-area estimate (relative comparator only, not
+CdA). The report includes the angle table, per-side values, fit adjustments,
+TT/tri notes and the local-AI fit review, which is instructed to use the same
+target bands.
+
+Targets are coaching bands from common video-fit practice — not clinical norms
+and not a diagnosis. Full protocol, camera setup, target table and limitations:
+**[docs/CYCLING-TT-FIT.md](docs/CYCLING-TT-FIT.md)**.
+
 ## What is measured
 
 - Joint angles, live + stored per frame: ankle, knee, hip, shoulder, elbow,
   neck–trunk, head tilt, trunk lean, shoulder tilt (33-point pose model;
   landmarks are smoothed with a 1-Euro filter to remove jitter without lag).
+  Angles are **aspect-corrected** from the frame width/height, so a 16:9 camera
+  no longer compresses them (values from sessions recorded before 2026-10-21
+  may differ slightly and are not directly comparable).
 - Movement: per-joint range of motion and mean angular velocity (deg/s).
 - Cadence (steps/min) from foot-strike detection, cross-checked with
   hip-oscillation frequency.
@@ -168,9 +189,10 @@ model (~40 s) and the whole review can take 1–3 minutes.
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-260 tests: metrics + biomechanics math, 1-Euro filter, synthetic gait-cycle
-ground-truth latching, advisor scoring/compare, storage, real-video pipeline,
-second-view (rear + side) analysis and report, report/API endpoints.
+323 tests: metrics + biomechanics math (including non-square aspect correction),
+1-Euro filter, synthetic gait-cycle ground-truth latching, cycling/TT live-fit
+and overlay, advisor scoring/compare, storage, real-video pipeline, second-view
+(rear + side) analysis and report, report/API endpoints.
 
 ## Use it on another computer (camera / phone camera connected there)
 

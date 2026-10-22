@@ -28,13 +28,16 @@ import gait_events as GA
 SIDES = ("left", "right")
 KNEE_KEY = {"left": "left_knee", "right": "right_knee"}
 HIP_KEY = {"left": "left_hip", "right": "right_hip"}
+ELBOW_KEY = {"left": "left_elbow", "right": "right_elbow"}
 ANKLE_KEY = {"left": "left_ankle", "right": "right_ankle"}
 SIDE_SHORT = {"left": "l", "right": "r"}
 
 BIKE_NOTES = (
-    "Cycling targets follow common video bike-fit ranges (Velogic Studio "
-    "metric guides; Holmes method 25-35 deg knee flexion at BDC; tri/TT "
-    "conventions). They are fit guidance, not clinical norms."
+    "Cycling targets follow common video bike-fit ranges (Velogic/MyVeloFit "
+    "style metrics; dynamic 2-D knee at BDC; tri/TT convention). They are fit "
+    "guidance, not clinical norms. Markerless 2-D angles carry a 3-9 deg error "
+    "and a ~2 deg bias vs 3-D; 5 mm of saddle height is ~1.2 deg at BDC, so use "
+    "10 mm steps and same-setup comparisons only."
 )
 
 
@@ -106,6 +109,37 @@ def rpm_from_series(t: np.ndarray, y: np.ndarray, band=(0.6, 2.4)):
     if not (band[0] <= float(freqs[gp]) <= band[1]):
         return None
     return float(freqs[m][np.argmax(spec[m])]) * 60.0
+
+
+def _round1(value):
+    """JSON-safe float rounded to 0.1 deg, or None when not a real number."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(f, 1) if math.isfinite(f) else None
+
+
+# Metric keys exposed by fit_targets() — also the order the UI/report lists.
+FIT_TARGET_KEYS = ("knee_bdc_deg", "knee_tdc_deg", "hip_tdc_deg",
+                   "torso_deg", "ankle_deg", "elbow_deg")
+
+
+def fit_targets(bike_type: object = "road") -> dict:
+    """Fit-target bands for a bike type: {metric_key: (lo, hi)} degrees.
+
+    Keys are FIT_TARGET_KEYS.  An unknown/absent bike type falls back to
+    config.DEFAULT_BIKE_TYPE (road), matching analyze_cycling().  A fresh dict
+    of plain floats is returned, so callers can serialise or tweak it without
+    touching config.CYCLING_BANDS.
+    """
+    bike = bike_type if bike_type in config.BIKE_TYPES else config.DEFAULT_BIKE_TYPE
+    out = {}
+    for key in FIT_TARGET_KEYS:
+        band = config.CYCLING_BANDS.get(key, {}).get(bike)
+        if band:
+            out[key] = (float(band[0]), float(band[1]))
+    return out
 
 
 # ------------------------------------------------------------ sagittal view
@@ -204,8 +238,10 @@ def analyze_cycling(rows, bike="road", params=None):
         out["shoulder_deg"] = round(float(np.mean([np.nanmean(x) for x in sh])), 1)
 
     # ---- targets for this bike type
+    targets = fit_targets(bike)
+
     def band(key):
-        return config.CYCLING_BANDS.get(key, {}).get(bike)
+        return targets.get(key)
 
     def entry(key, value, label, band_key=None, unit="deg"):
         b = band(band_key or key)
@@ -221,7 +257,8 @@ def analyze_cycling(rows, bike="road", params=None):
     if out.get("knee_tdc_min_deg") is not None:
         form["bike_knee_tdc"] = entry(
             "knee_tdc_deg", out["knee_tdc_min_deg"],
-            "Knee angle at top of stroke (TDC, most flexed)")
+            "Knee angle at top of stroke (TDC) — floor >= 68 deg; the upper "
+            "bound is a sanity cap, not a target")
     if out.get("hip_tdc_min_deg") is not None:
         form["bike_hip_tdc"] = entry(
             "hip_tdc_deg", out["hip_tdc_min_deg"],
@@ -232,8 +269,17 @@ def analyze_cycling(rows, bike="road", params=None):
     ank_vals = [d["ankle_mean_deg"] for d in per_side.values()
                 if d.get("ankle_mean_deg") is not None]
     if ank_vals:
-        form["bike_ankle"] = entry("ankle_deg", round(float(np.mean(ank_vals)), 1),
-                                   "Ankle angle (mean)")
+        # Research: markerless foot/ankle tracking is the weakest landmark
+        # (MediaPipe r as low as 0.25).  Report it, never pass/fail a fit on it.
+        form["bike_ankle"] = {
+            "value": round(float(np.mean(ank_vals)), 1), "band": None,
+            "in_band": None,
+            "label": "Ankle angle (descriptive — low confidence)",
+            "unit": "deg",
+        }
+    if out.get("elbow_deg") is not None:
+        form["bike_elbow"] = entry("elbow_deg", out["elbow_deg"],
+                                   "Elbow angle (mean)")
     if out.get("cadence_rpm") is not None:
         cb = config.CYCLING_CADENCE_BAND
         form["bike_cadence"] = {
@@ -253,14 +299,19 @@ def analyze_cycling(rows, bike="road", params=None):
                 "finding": f"Knee extension at BDC is {kb:.1f} deg — {kb - ktgt[1]:.0f} deg "
                            f"above the target {ktgt[0]:.0f}-{ktgt[1]:.0f} (saddle too high "
                            f"suspected).",
-                "action": "Saddle is probably 3-8 mm too high: lower it 3-5 mm, re-film and "
-                          "re-measure. Above ~150 deg the patellofemoral and hamstring load rises "
-                          "and the hips start rocking to reach the pedal."})
+                "action": "Saddle is probably 8-15 mm too high: lower it 10 mm, re-film and "
+                          "re-measure. A 5 mm change is below this measurement's resolution "
+                          "(~1.2 deg knee at BDC vs 3-9 deg markerless error); keep 5 mm only "
+                          "as a fine-tune after a 10 mm effect is confirmed. Above ~150 deg the "
+                          "patellofemoral and hamstring load rises and the hips start rocking "
+                          "to reach the pedal."})
         elif kb < ktgt[0]:
             sug.append({
                 "finding": f"Knee flexion at BDC is {180 - kb:.1f} deg (included {kb:.1f}, target "
                            f"{ktgt[0]:.0f}-{ktgt[1]:.0f}).",
-                "action": "Saddle is probably 3-8 mm too low: raise it 3-5 mm at a time and re-film. "
+                "action": "Saddle is probably 8-15 mm too low: raise it 10 mm at a time and re-film. "
+                          "A 5 mm change is below this measurement's resolution (~1.2 deg knee at "
+                          "BDC vs 3-9 deg markerless error); keep 5 mm as a fine-tune only. "
                           "Low saddles compress the knee at the top of the stroke and increase "
                           "anterior knee load."})
         else:
@@ -276,7 +327,7 @@ def analyze_cycling(rows, bike="road", params=None):
             "finding": f"Hip angle closes to {ht:.1f} deg at the top of the stroke "
                        f"(target >= {htgt[0]:.0f} for this discipline).",
             "action": "Very closed hip: consider shorter crank arms, raising the front end "
-                      "slightly, or moving the saddle back 3-5 mm; watch breathing comfort "
+                      "slightly, or moving the saddle back 10 mm; watch breathing comfort "
                       "and power at high torque."})
     tr = out.get("torso_deg")
     ttgt = band("torso_deg")
@@ -287,7 +338,184 @@ def analyze_cycling(rows, bike="road", params=None):
             "action": "Position is not yet aero: lower the front end progressively (10 mm steps) "
                       "and re-check the hip angle at TDC each time; aero gains should not close "
                       "the hip below the target."})
+    elb = out.get("elbow_deg")
+    etgt = band("elbow_deg")
+    if elb is not None and etgt:
+        if bike in ("tt", "tri"):
+            if elb > etgt[1]:
+                sug.append({
+                    "finding": f"Elbow angle is {elb:.1f} deg — straighter than the "
+                               f"{etgt[0]:.0f}-{etgt[1]:.0f} deg aerobar range for "
+                               f"{bike.upper()}.",
+                    "action": "elbows too straight for aerobars: shorten pad reach / "
+                              "raise pads slightly"})
+            elif elb < etgt[0]:
+                sug.append({
+                    "finding": f"Elbow angle is {elb:.1f} deg — more closed than the "
+                               f"{etgt[0]:.0f}-{etgt[1]:.0f} deg aerobar range for "
+                               f"{bike.upper()}.",
+                    "action": "elbows over-bent: extend reach or lower pads"})
+        elif elb > etgt[1]:
+            sug.append({
+                "finding": f"Elbow angle on the hoods is {elb:.1f} deg — arms are "
+                           f"straight (target {etgt[0]:.0f}-{etgt[1]:.0f}).",
+                "action": "arms locked: bend elbows ~10-15 deg"})
     out["suggestions"] = sug
+    return out
+
+
+# ---------------------------------------------------------------- live fit
+def _status_for(value, band):
+    """'in' / 'low' / 'high' for a value against a (lo, hi) band, else None."""
+    if band is None or value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    lo, hi = float(band[0]), float(band[1])
+    if v < lo:
+        return "low"
+    if v > hi:
+        return "high"
+    return "in"
+
+
+def live_status(fit, bike_type="road"):
+    """Band status per metric for a live_fit() result (or any fit-like dict).
+
+    Returns {metric_key: "in" | "low" | "high" | None}: every key from
+    fit_targets() plus "cadence_rpm" (checked against
+    config.CYCLING_CADENCE_BAND).  None means the value was not measurable or
+    has no target for this bike type — never a guess.
+    """
+    targets = fit_targets(bike_type)
+    fit = fit if isinstance(fit, dict) else {}
+    out = {key: _status_for(fit.get(key), targets.get(key))
+           for key in FIT_TARGET_KEYS}
+    out["cadence_rpm"] = _status_for(fit.get("cadence_rpm"),
+                                     config.CYCLING_CADENCE_BAND)
+    return out
+
+
+def live_fit(rows, bike_type: object = "road", window_s: object = 5.0):
+    """Rolling bike-fit snapshot over the LAST ``window_s`` seconds of rows.
+
+    Rows are the live frame-metric dicts (t_rel, left/right knee, hip, elbow,
+    trunk_lean) exactly as the pose loop emits them.  Only rows with a usable
+    ``t_rel`` inside the window are used; a joint metric needs at least 3
+    finite samples on a side (torso: 3 finite frames), otherwise it is None.
+    Nothing is extrapolated.
+
+    Returned shape (JSON-safe: plain int/float/str/None, no NaN, no numpy):
+
+        {
+          "bike_type":   "road" | "tt" | "tri",
+          "window_s":    float,        # effective window length (seconds)
+          "n_frames":    int,          # rows with t_rel inside the window
+          "knee_bdc_deg": float|None,  # max knee per visible leg (BDC, most
+                                       #   extended), highest of the legs
+          "knee_tdc_deg": float|None,  # min knee, ignoring values <= 60 deg
+                                       #   (bad poses), lowest of the legs
+          "hip_tdc_deg":  float|None,  # min hip angle over the window
+          "torso_deg":    float|None,  # 90 - mean |trunk_lean| (same convention
+                                       #   as analyze_cycling; |lean| < 85)
+          "elbow_deg":    float|None,  # mean of the available elbows
+          "cadence_rpm":  float|None,  # rpm_from_series on the left knee,
+                                       #   fallback right; None under 4 s
+          "targets":     {metric_key: [lo, hi], ...},   # fit_targets(), lists
+          "status":      {metric_key: "in"|"low"|"high"|None, ...,
+                          "cadence_rpm": ...},
+        }
+
+    ``ankle_deg`` is in targets/status for shape completeness but is not
+    estimated live, so its status is always None here.
+
+    Note on cadence: rpm_from_series is an FFT peak, so a short window has
+    coarse frequency resolution (~12 rpm per bin at 5 s, ~6 rpm at 10 s).  It
+    is a rolling estimate for the live panel, not a precision measurement.
+    """
+    win = 5.0
+    if isinstance(window_s, (int, float)) and not isinstance(window_s, bool):
+        cand = float(window_s)
+        if math.isfinite(cand) and cand > 0:
+            win = cand
+    bike = bike_type if bike_type in config.BIKE_TYPES else config.DEFAULT_BIKE_TYPE
+    out = {
+        "bike_type": bike,
+        "window_s": win,
+        "n_frames": 0,
+        "knee_bdc_deg": None,
+        "knee_tdc_deg": None,
+        "hip_tdc_deg": None,
+        "torso_deg": None,
+        "elbow_deg": None,
+        "cadence_rpm": None,
+        "targets": {k: [v[0], v[1]] for k, v in fit_targets(bike).items()},
+        "status": {},
+    }
+    try:
+        rows = [r for r in rows if isinstance(r, dict)] if rows is not None else []
+    except TypeError:
+        rows = []
+    if rows:
+        t = _col(rows, "t_rel")
+        ok = ~np.isnan(t)
+        if ok.any():
+            t_max = float(np.max(t[ok]))
+            keep = ok & (t >= t_max - win)          # the last window, inclusive
+            tt = t[keep]
+            sel = [r for r, k in zip(rows, keep) if k]
+            order = np.argsort(tt, kind="stable")
+            tt = tt[order]
+            sel = [sel[i] for i in order]
+            out["n_frames"] = int(len(sel))
+
+            def col(key):
+                return _col(sel, key)
+
+            # per side, so a window with only one leg visible still reports
+            # that leg — but never a value built from 1-2 frames
+            min_n = 3
+            bdc, tdc, hip_tdc, elbows = [], [], [], []
+            for side in SIDES:
+                kv = col(KNEE_KEY[side])
+                kv = kv[~np.isnan(kv)]
+                if kv.size >= min_n:
+                    bdc.append(float(np.max(kv)))
+                    good = kv[kv > 60.0]         # reject bad-pose readings
+                    if good.size:
+                        tdc.append(float(np.min(good)))
+                hv = col(HIP_KEY[side])
+                hv = hv[~np.isnan(hv)]
+                if hv.size >= min_n:
+                    hip_tdc.append(float(np.min(hv)))
+                ev = col(ELBOW_KEY[side])
+                ev = ev[~np.isnan(ev)]
+                if ev.size >= min_n:
+                    elbows.append(float(np.mean(ev)))
+            if bdc:
+                out["knee_bdc_deg"] = _round1(max(bdc))
+            if tdc:
+                out["knee_tdc_deg"] = _round1(min(tdc))
+            if hip_tdc:
+                out["hip_tdc_deg"] = _round1(min(hip_tdc))
+            if elbows:
+                out["elbow_deg"] = _round1(float(np.mean(elbows)))
+            tl = col("trunk_lean")
+            tl = tl[np.abs(tl) < 85.0]
+            tl = tl[~np.isnan(tl)]
+            if tl.size >= min_n:
+                out["torso_deg"] = _round1(90.0 - float(np.mean(np.abs(tl))))
+            for key in ("left_knee", "right_knee"):     # right = fallback
+                cad = rpm_from_series(tt, col(key))
+                if cad is not None and (config.CYCLING_CADENCE_HARD[0]
+                                        <= cad <= config.CYCLING_CADENCE_HARD[1]):
+                    out["cadence_rpm"] = _round1(cad)
+                    break
+    out["status"] = live_status(out, bike)
     return out
 
 

@@ -101,7 +101,7 @@ def main():
     ap.add_argument("--seg2", action="store_true",
                     help="estimate frontal area from the second camera silhouette")
     ap.add_argument("--cd", type=float, default=None,
-                    help="assumed drag coefficient for the aero watts estimate")
+                    help="assumed drag coefficient for the aero scenario estimate (not a measurement)")
     ap.add_argument("--saddle", type=float, default=None,
                     help="saddle height in cm (optional, recorded)")
     args = ap.parse_args()
@@ -176,7 +176,7 @@ def main():
             if si is not None:
                 lms_raw, _ = si.update(lms_raw, vt)
             lms = lf(lms_raw, vt) if lms_raw is not None else None
-            fm = M.frame_metrics(lms)
+            fm = M.frame_metrics(lms, aspect=proc.shape[1] / proc.shape[0])
             if lms is not None:
                 det += 1
             if args.seg and engine.seg_frac is not None:
@@ -200,7 +200,7 @@ def main():
                 if si2 is not None:
                     lms_raw2, _ = si2.update(lms_raw2, vt)
                 lms2 = lf2(lms_raw2, vt) if lms_raw2 is not None else None
-                fm2 = M.frame_metrics(lms2)
+                fm2 = M.frame_metrics(lms2, aspect=proc2.shape[1] / proc2.shape[0])
                 if lms2 is not None:
                     det2 += 1
                 if args.seg2 and engine2.seg_frac is not None:
@@ -257,7 +257,7 @@ def main():
     if si is not None:
         summary["side_identity"] = si.info()
     try:
-        ref = make_crop_refiner()
+        ref = make_crop_refiner(aspect=(w / h if h else 1.0))
         summary["keyframes"] = latch.save_snapshots(
             sess_dir, refine=(ref[1] if ref else None))
         if ref is not None:

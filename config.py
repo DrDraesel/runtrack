@@ -189,21 +189,36 @@ DISCIPLINE_LABELS = {"running": "Running", "cycling": "Cycling"}
 BIKE_LABELS = {"road": "Road bike", "tt": "Time trial", "tri": "Triathlon"}
 
 # Reference angle targets (degrees, included joint angle) by bike type.
-# Sources: Velogic Studio triathlon/road fit metric ranges (industry-standard
-# video fit tool), Holmes method 25-35 deg knee flexion at BDC (= 145-155
-# included; slightly stricter band used here), Slowtwitch/TT fit convention
-# (knee 137-143 included), common bike-fit guidance (torso 35-45 road).
+# Sources and evidence grades: research/CYCLING-TT-FIT-EVIDENCE.md.
+# Dynamic 2-D knee at BDC is the best-supported method; hip/torso/elbow bands
+# are video-fit convention (C/D), not validated clinical norms.
+#
+# elbow_deg is industry VIDEO-FIT guidance (shoulder-elbow-wrist included
+# angle), NOT a clinical norm: on the hoods the arm sits near-straight but
+# unlocked (~150-170), while on aerobars the forearm-supported position bends
+# the elbow to ~85-105.  Bands are coaching targets for a fit session.
 CYCLING_BANDS = {
-    "knee_bdc_deg": {"road": (140.0, 150.0), "tt": (140.0, 145.0),
-                     "tri": (140.0, 145.0)},
-    "knee_tdc_deg": {"road": (68.0, 95.0), "tt": (68.0, 95.0),
-                     "tri": (68.0, 95.0)},          # Velogic: min > 68
-    "hip_tdc_deg": {"road": (70.0, 90.0), "tt": (45.0, 75.0),
-                    "tri": (45.0, 75.0)},            # closed hip angle at top
-    "torso_deg": {"road": (35.0, 45.0), "tt": (10.0, 25.0),
+    # 2-D dynamic included angles.  Knee BDC: research/CYCLING-TT-FIT-EVIDENCE.md
+    # (dynamic 33-42 deg flexion = 138-147 included; commercial 140-145).
+    "knee_bdc_deg": {"road": (140.0, 150.0), "tt": (140.0, 147.0),
+                     "tri": (140.0, 147.0)},
+    # TDC is a FLOOR (>=68 deg), not a target band; 120 is only a sanity cap
+    # so absurd readings still flag.  Do not read the cap as a fit target.
+    "knee_tdc_deg": {"road": (68.0, 120.0), "tt": (68.0, 120.0),
+                     "tri": (68.0, 120.0)},
+    # Closed hip at TDC: MyVeloFit road 60-69; TT/tri conventional 40-60.
+    # (The old 70-90 road band would pass a rider whose hip never closes.)
+    "hip_tdc_deg": {"road": (55.0, 70.0), "tt": (40.0, 60.0),
+                    "tri": (40.0, 60.0)},
+    "torso_deg": {"road": (35.0, 50.0), "tt": (10.0, 25.0),
                   "tri": (15.0, 30.0)},              # vs horizontal
-    "ankle_deg": {"road": (80.0, 100.0), "tt": (100.0, 120.0),
+    # Ankle is reported descriptively only (markerless foot tracking is the
+    # weakest landmark; see BIKE_NOTES / analyze_cycling).  Bands kept for
+    # display, not enforced as a fit pass/fail.
+    "ankle_deg": {"road": (100.0, 130.0), "tt": (100.0, 120.0),
                   "tri": (100.0, 120.0)},
+    "elbow_deg": {"road": (150.0, 170.0), "tt": (85.0, 105.0),
+                  "tri": (85.0, 105.0)},             # hoods vs aerobars
 }
 # Hard warning thresholds (flag, not band) for cycling.
 CYCLING_FLAGS = {

@@ -178,15 +178,36 @@ class TestCyclingReport(unittest.TestCase):
         for needle in ("cycling position analysis", "Clinical review",
                        "Coach review", "Injury risk stratification",
                        "Rear-view control", "Aero analysis",
-                       "Cycling position score", "bike"):
+                       "Cycling position score", "bike",
+                       "TT/tri notes", "Elbow angle"):
             self.assertIn(needle, html, needle)
         self.assertNotIn("<h2>Gait phases latched</h2>", html)   # running-only
+        self.assertNotIn("Cd Cd", html)                         # aero wording
         self.assertNotIn("not applicable to a cycling session", html.split("<h2 class=\"group\">")[0],
                          "the position table should not show running not-assessed text")
         charts = {c.name for c in p.parent.glob("chart_*.png")}
         self.assertIn("chart_bike_knee.png", charts)
         self.assertIn("chart_bike_rear.png", charts)
         self.assertTrue(any(c.startswith("chart_aero") for c in charts), charts)
+
+    def test_rear_view_from_a_separate_row_stream(self):
+        # The live app keeps the rear camera in its own rows2 list (no r_
+        # prefix in that stream); the finalize step analyses it with
+        # analyze_rear(rows2, prefix="").  Verify that path directly.
+        rows2 = []
+        n = int(10 * 30)
+        omega = 2.0 * math.pi * (75.0 / 60.0)
+        for k in range(n):
+            phase = omega * (k / 30.0)
+            lm2 = SC.landmarks_rear(phase, SC.GEOM)
+            fm2 = M.frame_metrics(lm2)
+            fm2["t_rel"] = k / 30.0
+            rows2.append(fm2)
+        rear = C.analyze_rear(rows2, PARAMS, prefix="")
+        self.assertIsNotNone(rear)
+        self.assertIn("pelvic_obliquity_deg", rear)
+        self.assertIn("hip_vertical_travel", rear)
+        self.assertIn("knee_lateral_travel_left", rear)
 
     def test_report_survives_a_session_without_rear_or_aero(self):
         sid = self.seed(cycling_rows(with_rear=False, fa=None))
