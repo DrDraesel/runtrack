@@ -635,13 +635,17 @@ def analyze_rear(rows, params=None, prefix="r_"):
         dx = kx[ok] - hx[ok]
         dy = np.maximum(1e-6, hy[ok] - ky[ok])       # downward positive
         ang = np.degrees(np.arctan2(dx, dy))
-        r = _robust_range(ang)
+        # Report peak excursion from vertical, not the peak-to-peak range of a
+        # signed angle: a leg crossing the midline used to produce a spurious
+        # ~180 deg "travel" while the report compared it with an 8 deg target.
+        r = float(np.percentile(np.abs(ang), 95)) if len(ang) else None
         if r is not None:
             out[f"knee_travel_angle_{side}"] = {
                 "value_deg": round(r, 1),
                 "target_deg_avg": 8.0, "target_deg_good": 2.0,
                 "within_avg": bool(r <= 8.0), "within_good": bool(r <= 2.0),
-                "label": f"Knee travel angle vs vertical — {side}",
+                "method": "95th percentile absolute angle from vertical",
+                "label": f"Peak knee travel angle vs vertical — {side}",
             }
     return out
 

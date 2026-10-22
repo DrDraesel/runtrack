@@ -19,6 +19,7 @@ import clinical
 import config
 import cycling as CY
 import gait_events as GA
+import metrics as M
 from session_store import Store
 
 CLR_L = "#e4572e"
@@ -894,7 +895,7 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
         ("Vertical osc.", _fmt(summary.get("vertical_osc_cm"), " cm")),
         ("Power est.", _fmt(summary.get("power_est_watts"), " W")),
         ("Power / kg", _fmt(summary.get("power_per_kg_watts"), " W/kg")),
-        ("Form index", _fmt(summary.get("form_index"), " / 100")),
+        ("Metrics in band", _fmt(summary.get("form_index"), " %")),
         ("Form score", _fmt(summary.get("form_score"), " / 100")),
         ("Risk level", f'<span class="{risk_cls}">{esc(risk.get("level"))}</span>'),
         ("Source", esc(sess.get("source_label"))),
@@ -940,6 +941,34 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
         for k, v in cards)
 
     dq = summary.get("data_quality") or {}
+    orient = dq.get("camera_orientation") or {}
+    if not orient:
+        # Older sessions were finalized before the orientation check existed:
+        # derive it from the stored per-frame CSV so their rebuilt reports still
+        # warn instead of silently presenting invalid plane-specific metrics.
+        try:
+            with open(out_dir / "metrics.csv", newline="") as fh:
+                cached = list(csv.DictReader(fh))
+            orient = M.camera_orientation(cached)
+            orient["selected_plane"] = plane
+            if orient.get("guess") in ("frontal", "sagittal"):
+                orient["plane_match"] = bool(
+                    (plane == "sagittal" and orient["guess"] == "sagittal") or
+                    (plane == "frontal" and orient["guess"] == "frontal"))
+            else:
+                orient["plane_match"] = None
+        except Exception:
+            orient = {}
+    plane_warn = ""
+    if isinstance(orient, dict) and orient.get("plane_match") is False:
+        plane_warn = (
+            '<p class="caveat"><b>Camera-plane check failed.</b> '
+            f'The selected view is <b>{esc(plane)}</b>, but the footage looks '
+            f'<b>{esc(orient.get("guess_label") or orient.get("guess"))}</b> '
+            f'(median nose offset {esc(orient.get("nose_offset_ratio"))} shoulder widths). '
+            'Plane-specific metrics in this report are invalid. Re-record or re-import '
+            'with the camera side-on for sagittal analysis (and rear/front for frontal '
+            'analysis) before using these values.</p>')
     disc_meta = (" · discipline: <b>cycling</b> · bike: <b>"
                  + esc(config.BIKE_LABELS.get(bike_type, bike_type)) + "</b>"
                  if discipline == "cycling" else "")
@@ -996,6 +1025,9 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
    .muted, .disc, .caveat {{ color:#555; }}
    .noprint {{ display:none !important; }}
    .card, table, .scorebox, .drill, .kf, .coach {{ page-break-inside:avoid; }}
+   .kfgrid {{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }}
+   .kf {{ width:auto; margin:0; }}
+   .kf img {{ width:100%; height:auto; max-height:220px; object-fit:contain; }}
    .card {{ background:#f6f7f9; border:1px solid #ccc; color:#111; }}
    .card .k {{ color:#555; }}
    table th, table td {{ border-bottom:1px solid #ddd; color:#111; }}
@@ -1011,6 +1043,7 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
  · camera view: <b>{esc(plane)}</b>{disc_meta}{cam2_meta}
 {('· lower-body landmark coverage: <b>' + esc(dq.get('lower_body_coverage_pct')) + '%</b> (' + esc('ok' if dq.get('lower_body_ok') else 'too low for gait events') + ')') if dq.get('lower_body_coverage_pct') is not None else ''}</div>
 <button class="noprint" style="margin-top:10px" onclick="window.print()">🖨 Print / Save as PDF</button>
+{plane_warn}
 <div class="cards">{card_html}</div>
 
 <h2 class="group">{esc(clinical_title)}</h2>
@@ -1030,6 +1063,10 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
 {phases_section}
 
 <h2>Joint angles</h2>
+<p class="muted" style="font-size:12px;max-width:880px">Included joint angle:
+180° means the segment is straight. These are frame means over the whole clip, not peak
+flexion/extension or a clinical ROM measurement. A low <b>Tracked</b> percentage means the
+landmark was rarely visible; do not interpret that joint.</p>
 <table><tr><th>Joint</th><th>Mean</th><th>Min</th><th>Max</th><th>ROM</th><th>Angular vel.</th><th>Tracked</th></tr>
 {joint_rows or '<tr><td colspan="7">No joint data was tracked.</td></tr>'}</table>
 

@@ -217,7 +217,7 @@ signs. See `docs/CLINICAL-RATIONALE.md` for the workflow and checklist.
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-342 tests: metrics + biomechanics math (including non-square aspect correction),
+363 tests: metrics + biomechanics math (including non-square aspect correction),
 1-Euro filter, synthetic gait-cycle ground-truth latching, cycling/TT live-fit
 and overlay, advisor scoring/compare, storage, real-video pipeline, second-view
 (rear + side) analysis and report, report/API endpoints.

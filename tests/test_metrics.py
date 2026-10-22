@@ -140,3 +140,28 @@ class TestSessionAnalysis(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class TestCameraOrientation(unittest.TestCase):
+    @staticmethod
+    def _rows(nose, mid, left, right, n=12):
+        return [{"nose_x": nose, "_midsh_x": mid,
+                 "l_sh_x": left, "r_sh_x": right} for _ in range(n)]
+
+    def test_face_on_footage_guesses_frontal(self):
+        q = M.camera_orientation(self._rows(0.50, 0.50, 0.20, 0.80))
+        self.assertEqual(q["guess"], "frontal")
+        self.assertEqual(q["samples"], 12)
+
+    def test_profile_footage_guesses_sagittal(self):
+        q = M.camera_orientation(self._rows(0.10, 0.50, 0.45, 0.55))
+        self.assertEqual(q["guess"], "sagittal")
+
+    def test_three_quarter_view_is_not_forced(self):
+        q = M.camera_orientation(self._rows(0.58, 0.50, 0.40, 0.60))
+        self.assertEqual(q["guess"], "ambiguous")
+
+    def test_too_little_data_is_unknown(self):
+        q = M.camera_orientation(self._rows(0.5, 0.5, 0.2, 0.8, n=2))
+        self.assertEqual(q["guess"], "unknown")

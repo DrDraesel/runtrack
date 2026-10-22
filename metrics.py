@@ -418,6 +418,57 @@ def _asym_index(a, b):
     return max(0.0, 100.0 * (1.0 - abs(a - b) / m))
 
 
+
+def camera_orientation(rows) -> dict:
+    """Heuristic camera-facing check from pose landmarks.
+
+    This does not replace the operator's plane selection. It catches the common
+    and dangerous mistake of analysing a rear/front clip as a side (sagittal)
+    clip, or the reverse. The ratio is the median nose offset from the shoulder
+    midline divided by shoulder width: a face-on runner sits near 0, a profile
+    view is well above 1. Thresholds are deliberately wide; ambiguous is left
+    ambiguous rather than guessed.
+
+    Returns a JSON-safe dict, or a dict with ``guess='unknown'`` when there is
+    not enough usable data.
+    """
+    vals = []
+    for row in rows or []:
+        try:
+            nose = float(row.get("nose_x"))
+            mid = float(row.get("_midsh_x"))
+            left = float(row.get("l_sh_x"))
+            right = float(row.get("r_sh_x"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not all(np.isfinite(v) for v in (nose, mid, left, right)):
+            continue
+        sw = abs(left - right)
+        if sw < 0.05:          # shoulders not meaningfully visible
+            continue
+        vals.append(abs(nose - mid) / sw)
+    if len(vals) < 10:
+        return {"guess": "unknown", "samples": len(vals),
+                "method": "median |nose_x - shoulder_mid_x| / shoulder width",
+                "note": "not enough usable frames to check camera orientation"}
+    med = float(np.median(vals))
+    if med < 0.25:
+        guess = "frontal"
+    elif med > 0.60:
+        guess = "sagittal"
+    else:
+        guess = "ambiguous"
+    return {
+        "guess": guess,
+        "guess_label": {"frontal": "frontal (front/rear)", "sagittal": "sagittal (side)",
+                        "ambiguous": "ambiguous"}.get(guess, guess),
+        "nose_offset_ratio": round(med, 3),
+        "samples": len(vals),
+        "method": "median |nose_x - shoulder_mid_x| / shoulder width",
+        "note": "heuristic only; confirm the camera is side-on for sagittal metrics",
+    }
+
+
 def analyze_session(rows, *, weight_kg=None, height_cm=None, speed_kmh=None,
                     view_plane=None, events=None, discipline=None) -> dict:
     """Compute session summary from logged frame metrics rows.
@@ -656,11 +707,24 @@ def analyze_session(rows, *, weight_kg=None, height_cm=None, speed_kmh=None,
     # ---- data quality: is the lower body even in this footage? -------------
     lb_cov = GA.lower_body_coverage(rows)
     lb_ok = not GA.events_not_assessable(lb_cov)
+    orient = camera_orientation(rows)
+    orient["selected_plane"] = plane
+    if orient.get("guess") in ("frontal", "sagittal"):
+        orient["plane_match"] = bool(
+            (plane == "sagittal" and orient["guess"] == "sagittal") or
+            (plane == "frontal" and orient["guess"] == "frontal"))
+    else:
+        orient["plane_match"] = None
     out["data_quality"] = {
         "lower_body_coverage_pct": round(lb_cov, 1),
         "lower_body_ok": bool(lb_ok),
         "min_lower_body_coverage_pct": config.LOWER_BODY_MIN_COVERAGE_PCT,
+        "camera_orientation": orient,
     }
+    if orient.get("plane_match") is False:
+        out["labels"].append(
+            "camera-plane check failed: footage looks %s but the selected view is %s; "
+            "plane-specific metrics are invalid" % (orient.get("guess_label"), plane))
     if not lb_ok:
         out["data_quality"]["note"] = config.GAIT_NOT_ASSESSABLE_TEXT
         out["gait_events"]["note"] = config.GAIT_NOT_ASSESSABLE_TEXT

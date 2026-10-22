@@ -342,6 +342,7 @@ def build_findings(sess: dict, summary: dict, intake: dict | None = None) -> dic
             "duration_s": _number(summary.get("duration_s") or sess.get("duration_s"), 0, 100000),
             "coverage": summary.get("form_score_detail", {}).get("coverage")
             if isinstance(summary.get("form_score_detail"), dict) else None,
+            "camera_orientation": (summary.get("data_quality") or {}).get("camera_orientation"),
             "not_assessed": summary.get("not_assessed") or {},
         },
         "patient_context": _deidentified_context(sess, intake),
