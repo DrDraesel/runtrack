@@ -127,16 +127,26 @@ def chat_stream(messages, timeout=DEFAULT_TIMEOUT_S, opener=None):
         yield {"done": True, "model": model}
 
 
-def describe_images(prompt, images_b64, timeout=280.0, opener=None):
-    """One-shot text/vision call for the form review.
+def describe_images(prompt, images_b64, timeout=280.0, opener=None,
+                    json_mode=False, num_predict=None):
+    """One-shot text/vision call for the form review or clinical draft.
 
-    Returns the reply text. Raises RuntimeError with a user-readable message
-    on any failure (the caller turns it into the JSON error reply).
+    ``json_mode`` asks the local runner for a JSON object (Ollama ``format``);
+    ``num_predict`` raises the output cap for structured drafts.  API mode adds
+    the OpenAI ``response_format`` hint.  Returns reply text; raises RuntimeError
+    with a user-readable message on any failure.
     """
     opener = opener or urllib.request.urlopen
     if not api_mode():
-        body = json.dumps({"model": config.OLLAMA_MODEL, "prompt": prompt,
-                           "images": list(images_b64 or []), "stream": False}).encode()
+        options = {"temperature": 0.1}
+        if num_predict:
+            options["num_predict"] = int(num_predict)
+        body_obj = {"model": config.OLLAMA_MODEL, "prompt": prompt,
+                    "images": list(images_b64 or []), "stream": False,
+                    "think": False, "options": options}
+        if json_mode:
+            body_obj["format"] = "json"
+        body = json.dumps(body_obj).encode()
         request = urllib.request.Request(
             config.OLLAMA_URL.rstrip("/") + "/api/generate", data=body,
             headers={"Content-Type": "application/json"}, method="POST")
@@ -160,9 +170,12 @@ def describe_images(prompt, images_b64, timeout=280.0, opener=None):
     for image in list(images_b64 or [])[:3]:
         parts.append({"type": "image_url",
                       "image_url": {"url": "data:image/jpeg;base64," + str(image)}})
-    body = json.dumps({"model": config.AI_API_MODEL,
-                       "messages": [{"role": "user", "content": parts}],
-                       "stream": False}, allow_nan=False).encode("utf-8")
+    api_body = {"model": config.AI_API_MODEL,
+                "messages": [{"role": "user", "content": parts}],
+                "stream": False}
+    if json_mode:
+        api_body["response_format"] = {"type": "json_object"}
+    body = json.dumps(api_body, allow_nan=False).encode("utf-8")
     request = urllib.request.Request(_api_url(), data=body, headers=_api_headers(),
                                      method="POST")
     try:

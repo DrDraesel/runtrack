@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RunTrack · Clinical rationale #{{ sid }}</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0e1318; color:#e5edf5; font:14px/1.5 system-ui,Segoe UI,Arial,sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid #25303b; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  header .meta { color:#9fb0c0; font-size:12.5px; }
+  main { max-width:1380px; margin:0 auto; padding:18px 22px 60px; }
+  .banner { border:1px solid #7a5a12; background:#2a2110; color:#ffe0a0; padding:10px 12px; border-radius:8px; margin-bottom:14px; }
+  .banner.red { border-color:#8b2f2f; background:#2a1414; color:#ffb4b4; }
+  .grid { display:grid; grid-template-columns:minmax(320px,0.9fr) minmax(460px,1.5fr); gap:16px; align-items:start; }
+  .card { background:#151b22; border:1px solid #25303b; border-radius:10px; padding:14px; margin-bottom:16px; }
+  h2 { font-size:15px; margin:0 0 10px; color:#9fd3ff; }
+  h3 { font-size:13px; margin:14px 0 6px; color:#cfe4f7; }
+  label { display:block; font-size:12px; color:#9fb0c0; margin:9px 0 3px; }
+  input, textarea, select { width:100%; background:#0f151b; color:#e5edf5; border:1px solid #2a3744; border-radius:6px; padding:7px 8px; font:inherit; }
+  textarea { min-height:64px; resize:vertical; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .checks { max-height:230px; overflow:auto; border:1px solid #2a3744; border-radius:6px; padding:8px; background:#0f151b; }
+  .checks label { display:flex; gap:8px; align-items:flex-start; margin:5px 0; color:#d6e4f0; font-size:12.5px; }
+  .checks input { width:auto; margin-top:2px; }
+  .muted { color:#8fa0b0; font-size:12px; }
+  .btn { background:#2563eb; color:#fff; border:0; border-radius:7px; padding:9px 14px; font-weight:600; cursor:pointer; margin:10px 6px 0 0; }
+  .btn.ghost { background:#1b2733; border:1px solid #38506a; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:6px 7px; border-bottom:1px solid #25303b; vertical-align:top; }
+  th { color:#9fd3ff; font-weight:600; }
+  .pill { display:inline-block; border:1px solid #38506a; border-radius:12px; padding:1px 8px; font-size:11px; color:#b9d7f2; }
+  .ok { color:#4ade80; } .warn { color:#fbbf24; } .bad { color:#f87171; }
+  .draft { border:1px solid #7a5a12; background:#1d1a12; border-radius:8px; padding:12px; }
+  .draft.signed { border-color:#24512f; background:#132018; }
+  .draft h4 { margin:0 0 6px; font-size:13px; color:#ffe0a0; }
+  .ev { color:#9fb0c0; font-size:11.5px; }
+  .toast { position:fixed; right:18px; bottom:18px; background:#1b2733; border:1px solid #38506a; padding:10px 14px; border-radius:8px; display:none; max-width:460px; }
+  .sign { border-top:2px solid #38506a; margin-top:16px; padding-top:12px; }
+  @media (max-width: 950px) { .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Clinical rationale workspace</h1>
+  <span class="meta">RunTrack session #{{ sid }} · {{ patient.name if patient else '' }} · {{ session.started_ts if session else '' }}</span>
+  <a class="pill" href="/report/{{ sid }}/">Open report</a>
+  <a class="pill" href="/">Back to RunTrack</a>
+</header>
+<main>
+  <div class="banner">
+    <b>Clinician-in-the-loop.</b> The AI draft is generated from measured, de-identified findings and the installed evidence catalogue.
+    It is not a diagnosis or treatment plan. Review every statement, complete your own assessment and plan, then sign.
+    The signed note is the clinical record.
+  </div>
+  <div id="redFlagBanner" class="banner red" style="display:none"></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Clinical intake</h2>
+        <div class="muted">Do not type names, phone numbers or other identifiers into free text. The AI receives only the de-identified fields below.</div>
+        <div class="row">
+          <div><label>Age (years)</label><input id="age" type="number" min="10" max="100" step="1"></div>
+          <div><label>Sex</label><select id="sex"><option value=""></option><option>female</option><option>male</option><option>other</option><option>prefer not to say</option></select></div>
+        </div>
+        <div class="row">
+          <div><label>Height (cm)</label><input id="height_cm" type="number" step="0.5"></div>
+          <div><label>Weight (kg)</label><input id="weight_kg" type="number" step="0.1"></div>
+        </div>
+        <div class="row">
+          <div><label>Running load (km/week)</label><input id="training_load_km_week" type="number" step="1"></div>
+          <div><label>Recent load change</label><input id="training_change" placeholder="e.g. +30% in 3 weeks"></div>
+        </div>
+        <div class="row">
+          <div><label>Pain now (NRS 0–10)</label><input id="pain_nrs" type="number" min="0" max="10" step="1"></div>
+          <div><label>Pain duration (weeks)</label><input id="pain_duration_weeks" type="number" step="1"></div>
+        </div>
+        <label>Pain location</label><input id="pain_location" placeholder="e.g. anterior knee, lateral hip">
+        <label>Pain onset / pattern</label><input id="pain_onset" placeholder="e.g. insidious, worse downhill">
+        <label>Injury history</label><textarea id="injury_history"></textarea>
+        <label>Goals</label><textarea id="goals"></textarea>
+
+        <h3>Red flags</h3>
+        <div id="redFlags" class="checks"></div>
+        <label>Red-flag notes</label><textarea id="red_flag_notes"></textarea>
+
+        <h3>Examination / other data</h3>
+        <label>Exam findings</label><textarea id="exam_findings" placeholder="Observation, palpation, strength, ROM, special tests"></textarea>
+        <label>Imaging / labs</label><textarea id="imaging_labs"></textarea>
+        <label>Medications</label><textarea id="medications"></textarea>
+        <label>Other conditions</label><textarea id="other_conditions"></textarea>
+
+        <h3>Patient-reported outcomes</h3>
+        <div class="row">
+          <div><label>LEFS (0–80)</label><input id="prom_LEFS" type="number" min="0" max="80" step="1"></div>
+          <div><label>NPRS (0–10)</label><input id="prom_NPRS" type="number" min="0" max="10" step="1"></div>
+        </div>
+        <div class="row">
+          <div><label>OSTRC (0–100)</label><input id="prom_OSTRC" type="number" min="0" max="100" step="1"></div>
+          <div><label>VISA (0–100)</label><input id="prom_VISA" type="number" min="0" max="100" step="1"></div>
+        </div>
+        <label>Other PROM / notes</label><input id="prom_other" placeholder="e.g. scale and score">
+        <button class="btn" id="saveIntake">Save intake</button>
+        <span class="muted" id="intakeSaved"></span>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Deterministic findings</h2>
+        <div class="muted">Computed by the app from the session. These values are not generated by the AI.</div>
+        <div id="findings"></div>
+      </div>
+      <div class="card">
+        <h2>Evidence catalogue</h2>
+        <div class="muted">Installed evidence used by the draft. Clinician should verify applicability.</div>
+        <div id="evidence"></div>
+      </div>
+      <div class="card">
+        <h2>AI clinical rationale draft</h2>
+        <div id="draft"></div>
+        <button class="btn" id="generate">Generate AI draft</button>
+        <span class="muted" id="genStatus"></span>
+      </div>
+      <div class="card sign">
+        <h2>Clinician assessment, plan and signature</h2>
+        <div class="muted">This section is authored and signed by the clinician. The AI cannot fill it.</div>
+        <div class="row">
+          <div><label>Clinician name *</label><input id="clinician_name"></div>
+          <div><label>Credentials *</label><input id="credentials" placeholder="e.g. MD, DO, DPT, DC"></div>
+        </div>
+        <label>License / registration ID</label><input id="license_id">
+        <label>Clinical assessment *</label><textarea id="assessment" style="min-height:90px"></textarea>
+        <label>Differential considerations (clinician-authored)</label><textarea id="differential"></textarea>
+        <label>Treatment / management plan *</label><textarea id="plan" style="min-height:100px"></textarea>
+        <label>Patient education</label><textarea id="patient_education"></textarea>
+        <label>Follow-up / outcome measures</label><textarea id="follow_up" placeholder="e.g. LEFS at 4 weeks; load progression; review"></textarea>
+        <label>Outcomes at this visit</label><textarea id="outcomes"></textarea>
+        <label class="muted" style="display:flex; gap:8px; align-items:flex-start; margin-top:10px">
+          <input id="attestation" type="checkbox" style="width:auto;margin-top:2px">
+          <span>I reviewed the measured findings, the evidence catalogue and the AI draft. I edited or rejected anything I do not agree with. This note reflects my independent clinical judgment.</span>
+        </label>
+        <button class="btn" id="sign">Sign clinical note</button>
+        <span class="muted" id="signStatus"></span>
+        <div id="signedNote"></div>
+      </div>
+    </div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+const SID = {{ sid }};
+const $ = (id) => document.getElementById(id);
+let STATE = null;
+function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg, bad) { const t=$('toast'); t.textContent=msg; t.style.display='block'; t.style.borderColor=bad?'#8b2f2f':'#38506a'; setTimeout(()=>t.style.display='none', 5000); }
+function val(id){ const v=$(id).value.trim(); return v===''?null:v; }
+function num(id){ const v=$(id).value; return v===''?null:Number(v); }
+function set(id,v){ if ($(id)) $(id).value = (v===null||v===undefined)?'':v; }
+function setChecks(){ const box=$('redFlags'); box.innerHTML=''; (STATE?.red_flags_all||[]).forEach((f,i)=>{ const id='rf'+i; const l=document.createElement('label'); const c=document.createElement('input'); c.type='checkbox'; c.id=id; c.value=f; l.appendChild(c); const s=document.createElement('span'); s.textContent=f; l.appendChild(s); box.appendChild(l); }); }
+function gatherIntake(){
+  const flags=[]; (STATE?.red_flags_all||[]).forEach((f,i)=>{ if($('rf'+i)?.checked) flags.push(f); });
+  const proms={};
+  for (const k of ['LEFS','OSTRC','NPRS','VISA']) { const v=num('prom_'+k); if(v!==null) proms[k]=v; }
+  if(val('prom_other')) proms.other=val('prom_other');
+  return {age:num('age'), sex:val('sex'), height_cm:num('height_cm'), weight_kg:num('weight_kg'),
+    training_load_km_week:num('training_load_km_week'), training_change:val('training_change'),
+    pain_nrs:num('pain_nrs'), pain_location:val('pain_location'), pain_duration_weeks:num('pain_duration_weeks'),
+    pain_onset:val('pain_onset'), injury_history:val('injury_history'), goals:val('goals'),
+    red_flags:flags, red_flag_notes:val('red_flag_notes'), exam_findings:val('exam_findings'),
+    imaging_labs:val('imaging_labs'), medications:val('medications'), other_conditions:val('other_conditions'), proms};
+}
+function fillIntake(i){
+  i=i||{}; set('age',i.age); set('sex',i.sex); set('height_cm',i.height_cm); set('weight_kg',i.weight_kg);
+  set('training_load_km_week',i.training_load_km_week); set('training_change',i.training_change);
+  set('pain_nrs',i.pain_nrs); set('pain_location',i.pain_location); set('pain_duration_weeks',i.pain_duration_weeks);
+  set('pain_onset',i.pain_onset); set('injury_history',i.injury_history); set('goals',i.goals);
+  set('red_flag_notes',i.red_flag_notes); set('exam_findings',i.exam_findings); set('imaging_labs',i.imaging_labs);
+  set('medications',i.medications); set('other_conditions',i.other_conditions);
+  const p=i.proms||{}; for (const k of ['LEFS','OSTRC','NPRS','VISA']) set('prom_'+k,p[k]); set('prom_other',p.other);
+  (STATE?.red_flags_all||[]).forEach((f,idx)=>{ const c=$('rf'+idx); if(c) c.checked=(i.red_flags||[]).includes(f); });
+  const rb=$('redFlagBanner');
+  if ((i.red_flags||[]).length) { rb.style.display='block'; rb.textContent='Red flag(s) documented: '+i.red_flags.join(' · ')+'. Clinician evaluation is required before any exercise or loading advice.'; }
+  else { rb.style.display='none'; rb.textContent=''; }
+}
+function renderFindings(f){
+  const rows=[];
+  const risk=f.risk||{};
+  rows.push(`<p><span class="pill">${esc(f.discipline)}</span> <span class="pill">view: ${esc(f.view_plane)}</span> <span class="pill">risk level: ${esc(risk.level||'—')} (${esc(risk.points??'—')} pts)</span></p>`);
+  if(f.red_flag_alert) rows.push('<p class="bad"><b>Red flags documented.</b> Clinician evaluation is required; the AI draft must not attribute them to a diagnosis.</p>');
+  rows.push('<table><tr><th>Metric</th><th>Value</th><th>Target</th><th>Status</th><th>Evidence</th></tr>');
+  (f.metrics||[]).forEach(m=>{
+    const band=m.band?`${m.band[0]}–${m.band[1]}`:'—';
+    const st=m.in_band===true?'<span class="ok">in range</span>':(m.in_band===false?'<span class="warn">outside</span>':'reported');
+    rows.push(`<tr><td>${esc(m.label)}</td><td>${esc(m.value??'—')} ${esc(m.unit||'')}</td><td>${esc(band)}</td><td>${st}</td><td class="ev">${esc((m.evidence_ids||[]).join(', '))}</td></tr>`);
+  });
+  rows.push('</table>');
+  if ((risk.flags||[]).length) { rows.push('<h3>Screening flags</h3><ul>'); risk.flags.forEach(x=>rows.push(`<li><b>${esc(x.finding)}</b>${x.value!==null?` — ${esc(x.value)}`:''} <span class="ev">${esc((x.evidence_ids||[]).join(', '))}</span></li>`)); rows.push('</ul>'); }
+  const na=Object.keys(f.data_quality?.not_assessed||{}); if(na.length) rows.push(`<p class="muted">Not assessed in this view: ${esc(na.join(', '))}</p>`);
+  rows.push(`<p class="muted">${esc(risk.caveat||'')}</p>`);
+  $('findings').innerHTML=rows.join('');
+}
+function renderEvidence(items){
+  $('evidence').innerHTML = '<table><tr><th>ID</th><th>Claim</th><th>Source</th><th>Grade</th></tr>' +
+    (items||[]).map(e=>`<tr><td>${esc(e.id)}</td><td>${esc(e.claim)}</td><td>${esc(e.source)} ${esc(e.year||'')}${e.doi?` · ${esc(e.doi)}`:''}</td><td>${esc(e.grade||'')}</td></tr>`).join('') + '</table>' +
+    '<p class="muted">Caveats are stored with each item in clinical_evidence.json. Evidence grades are review aids, not a substitute for clinician judgment.</p>';
+}
+function renderDraft(d){
+  if(!d){ $('draft').innerHTML='<p class="muted">No draft yet. Save the intake, then generate.</p>'; return; }
+  if(d.status==='blocked'||d.status==='error'){
+    $('draft').innerHTML=`<div class="draft"><h4>Draft withheld</h4><p>${esc((d.issues||[]).join(' '))}</p><p class="muted">The deterministic findings and evidence table above remain available. No unsafe AI text is displayed.</p></div>`; return;
+  }
+  const f=(d.findings||[]).map(x=>`<li><b>${esc(x.finding)}</b> — ${esc(x.interpretation||'')} <span class="ev">[${esc((x.evidence_ids||[]).join(', '))}]</span></li>`).join('');
+  const q=(d.clinical_questions||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+  const c=(d.cannot_conclude||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+  $('draft').innerHTML=`<div class="draft"><h4>AI draft — ${esc(d.status)} — NOT SIGNED</h4>
+    <p>${esc(d.summary||'')}</p>${f?`<h3>Findings</h3><ul>${f}</ul>`:''}
+    ${q?`<h3>Questions for the clinician</h3><ul>${q}</ul>`:''}
+    ${c?`<h3>What cannot be concluded</h3><ul>${c}</ul>`:''}
+    ${d.red_flag_note?`<p class="warn">${esc(d.red_flag_note)}</p>`:''}
+    <p class="muted">${esc(d.disclaimer||'')} · model ${esc(d.model||'')} · ${esc(d.generated_at||'')} · evidence ${esc(d.evidence_version||'')}</p></div>`;
+}
+function renderReview(r){
+  if(!r){ $('signedNote').innerHTML=''; return; }
+  if(r.status !== 'signed'){ $('signedNote').innerHTML='<div class="draft"><h4>Signature invalidated</h4><p>The intake changed after this note was signed. Review the changes and sign again.</p></div>'; return; }
+  $('signedNote').innerHTML=`<div class="draft signed"><h4>Signed clinical note — v${esc(r.version)}</h4>
+    <p><b>${esc(r.clinician_name)}</b> · ${esc(r.credentials)} ${r.license_id?'· '+esc(r.license_id):''} · ${esc(r.signed_at)}</p>
+    <p><b>Assessment:</b><br>${esc(r.assessment).replace(/\n/g,'<br>')}</p>
+    ${r.differential?`<p><b>Differential:</b><br>${esc(r.differential).replace(/\n/g,'<br>')}</p>`:''}
+    <p><b>Plan:</b><br>${esc(r.plan).replace(/\n/g,'<br>')}</p>
+    ${r.follow_up?`<p><b>Follow-up / outcomes:</b><br>${esc(r.follow_up).replace(/\n/g,'<br>')}</p>`:''}
+    <p class="muted">${esc(r.disclaimer||'')}</p></div>`;
+  set('clinician_name',r.clinician_name); set('credentials',r.credentials); set('license_id',r.license_id);
+  set('assessment',r.assessment); set('differential',r.differential); set('plan',r.plan);
+  set('patient_education',r.patient_education); set('follow_up',r.follow_up); set('outcomes',r.outcomes);
+}
+async function load(){
+  const r=await fetch('/api/clinical/'+SID); const d=await r.json();
+  if(!d.ok){ toast(d.error||'could not load',true); return; }
+  STATE=d; setChecks(); fillIntake(d.intake||{}); renderFindings(d.findings||{}); renderEvidence(d.evidence||[]); renderDraft(d.ai_draft); renderReview(d.review);
+  $('genStatus').textContent='model: '+(d.model||'—')+' · evidence '+(d.evidence_version||'—');
+}
+async function post(path, body){ const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}); return await r.json(); }
+$('saveIntake').onclick=async()=>{ const d=await post('/api/clinical/'+SID+'/intake', gatherIntake()); if(!d.ok){toast(d.error||'save failed',true);return;} STATE=d.state; fillIntake(STATE.intake||{}); renderFindings(STATE.findings||{}); renderEvidence(STATE.evidence||[]); renderReview(STATE.review); $('intakeSaved').textContent='saved '+(STATE.intake?.age??''); toast('Intake saved'); };
+$('generate').onclick=async()=>{ $('genStatus').textContent='generating locally…'; const d=await post('/api/clinical/'+SID+'/generate',{}); if(!d.ok){$('genStatus').textContent='';toast(d.error||'generation failed',true);return;} STATE=d.state; renderDraft(STATE.ai_draft); renderEvidence(STATE.evidence||[]); $('genStatus').textContent='model: '+(d.model||'—')+' · '+(STATE.ai_draft?.status||''); };
+$('sign').onclick=async()=>{ const body={clinician_name:val('clinician_name'),credentials:val('credentials'),license_id:val('license_id'),assessment:val('assessment'),differential:val('differential'),plan:val('plan'),patient_education:val('patient_education'),follow_up:val('follow_up'),outcomes:val('outcomes'),attestation:$('attestation').checked}; const d=await post('/api/clinical/'+SID+'/review',body); if(!d.ok){toast(d.error||'sign failed',true);return;} STATE=d.state; renderReview(STATE.review); toast('Clinical note signed'); };
+load();
+</script>
+</body>
+</html>

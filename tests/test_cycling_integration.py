@@ -175,9 +175,9 @@ class TestCyclingReport(unittest.TestCase):
         sid = self.seed(cycling_rows())
         p = Path(R.build(sid, self.store))
         html = p.read_text(encoding="utf-8")
-        for needle in ("cycling position analysis", "Clinical review",
-                       "Coach review", "Injury risk stratification",
-                       "Rear-view control", "Aero analysis",
+        for needle in ("cycling position analysis", "Clinical screening",
+                       "Clinical rationale", "Coach review", "Injury risk screening",
+                       "Automated drill suggestions", "Rear-view control", "Aero analysis",
                        "Cycling position score", "bike",
                        "TT/tri notes", "Elbow angle"):
             self.assertIn(needle, html, needle)

@@ -24,6 +24,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 
 import advisor
 import ai_backend
+import clinical
 import cameras
 import config
 import cycling as CY
@@ -1186,6 +1187,75 @@ def api_session_edit(sid: int):
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     return jsonify({"ok": True, "session": s, "patient": p})
+
+
+@app.get("/clinical/<int:sid>")
+def clinical_page(sid: int):
+    """Clinician workspace: intake -> evidence-linked AI draft -> signed note."""
+    sess = STORE.get_session(sid)
+    if not sess:
+        abort(404)
+    return render_template("clinical.html", sid=sid,
+                           patient={"name": sess.get("patient_name"),
+                                    "phone": sess.get("patient_phone")},
+                           session=sess)
+
+
+def _clinical_summary(sess):
+    try:
+        return json.loads(sess.get("summary_json") or "{}")
+    except Exception:
+        return {}
+
+
+@app.get("/api/clinical/<int:sid>")
+def api_clinical(sid: int):
+    sess = STORE.get_session(sid)
+    if not sess:
+        return jsonify({"ok": False, "error": "unknown session"}), 404
+    state = clinical.public_state(sess, STORE, _clinical_summary(sess))
+    return jsonify({"ok": True, **state})
+
+
+@app.post("/api/clinical/<int:sid>/intake")
+def api_clinical_intake(sid: int):
+    if not _origin_ok():
+        abort(403)
+    sess = STORE.get_session(sid)
+    if not sess:
+        return jsonify({"ok": False, "error": "unknown session"}), 404
+    data = request.get_json(force=True, silent=True) or {}
+    state = clinical.save_intake(sess, STORE, data)
+    return jsonify({"ok": True, "state": clinical.public_state(
+        sess, STORE, _clinical_summary(sess))})
+
+
+@app.post("/api/clinical/<int:sid>/generate")
+def api_clinical_generate(sid: int):
+    if not _origin_ok():
+        abort(403)
+    sess = STORE.get_session(sid)
+    if not sess:
+        return jsonify({"ok": False, "error": "unknown session"}), 404
+    state = clinical.generate_draft(sess, STORE, _clinical_summary(sess))
+    return jsonify({"ok": True, "state": clinical.public_state(
+        sess, STORE, _clinical_summary(sess)), "model": clinical.ai_backend.active_model()})
+
+
+@app.post("/api/clinical/<int:sid>/review")
+def api_clinical_review(sid: int):
+    if not _origin_ok():
+        abort(403)
+    sess = STORE.get_session(sid)
+    if not sess:
+        return jsonify({"ok": False, "error": "unknown session"}), 404
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        clinical.save_review(sess, STORE, data)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "state": clinical.public_state(
+        sess, STORE, _clinical_summary(sess))})
 
 
 @app.get("/api/sessions")

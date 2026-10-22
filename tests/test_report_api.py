@@ -88,7 +88,8 @@ class TestReportContent(ReportFixture):
         p = Path(R.build(sid, self.store))
         self.assertTrue(p.exists())
         html = p.read_text(encoding="utf-8")
-        for needle in ("Print / Save as PDF", "Overall form score", "Injury risk stratification",
+        for needle in ("Print / Save as PDF", "Overall form score", "Injury risk screening",
+                       "Clinical screening", "Clinical rationale", "Automated drill suggestions",
                        "@media print", "@page", "Gait event keyframes", "Gait phases latched",
                        "Left / right symmetry", "not assessed (wrong camera view)",
                        "camera view"):
@@ -97,6 +98,45 @@ class TestReportContent(ReportFixture):
             (p.parent / "summary.json").read_text(encoding="utf-8"))))
         charts = list(p.parent.glob("chart_*.png"))
         self.assertGreaterEqual(len(charts), 7)
+
+    def test_report_separates_ai_draft_and_signed_clinician_note(self):
+        sid, _ = self.seed("Ann", "111", cadence_spm=180, shin=3.0, osc=0.02)
+        self.store.save_json(sid, "clinical.json", {
+            "schema": "runtrack.clinical.v1",
+            "intake": {"age": 34, "red_flags": ["Night pain or rest pain that wakes the patient"]},
+            "ai_draft": {
+                "status": "draft", "model": "qwen3.8:latest",
+                "generated_at": "2026-10-21T20:00:00+00:00",
+                "summary": "Cadence measured 180 spm in this session; this is descriptive only.",
+                "findings": [{"finding": "Cadence 180 spm",
+                              "evidence_ids": ["RUN-CADENCE"],
+                              "interpretation": "Descriptive association, not a diagnosis."}],
+                "clinical_questions": ["How do symptoms behave with load?"],
+                "cannot_conclude": ["A diagnosis cannot be made from this video."],
+                "disclaimer": "AI-generated draft for clinician review only.",
+            },
+            "review": {
+                "status": "signed", "version": 1,
+                "clinician_name": "Dr Test", "credentials": "MD",
+                "assessment": "Clinician assessment text.",
+                "plan": "Clinician plan text.", "signed_at": "2026-10-21T20:10:00+00:00",
+                "disclaimer": "Signed clinician note.",
+            },
+        })
+        html = Path(R.build(sid, self.store)).read_text(encoding="utf-8")
+        for needle in ("Clinical rationale — clinician review required",
+                       "AI clinical rationale draft — not signed", "Evidence cited",
+                       "Clinician assessment, plan and signature", "Dr Test",
+                       "Clinician assessment text.", "Clinician plan text."):
+            self.assertIn(needle, html, needle)
+        self.assertNotIn("raw_text", html)
+
+    def test_report_marks_unsigned_clinical_note(self):
+        sid, _ = self.seed("Bob", "222", cadence_spm=180, shin=3.0, osc=0.02)
+        self.store.save_json(sid, "clinical.json", {"intake": {}, "ai_draft": None,
+                                                   "review": None})
+        html = Path(R.build(sid, self.store)).read_text(encoding="utf-8")
+        self.assertIn("UNSIGNED — NOT A CLINICAL RECORD", html)
 
     def test_report_is_honest_without_lower_body(self):
         sid, _ = self.seed("Bob", "222", with_legs=False)

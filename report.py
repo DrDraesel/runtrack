@@ -15,6 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import advisor
+import clinical
 import config
 import cycling as CY
 import gait_events as GA
@@ -272,6 +273,135 @@ def _badge(verdict: str) -> str:
     return f'<span class="badge {cls}">{html.escape(str(verdict))}</span>'
 
 
+def _clinical_section(data, sid, summary, store=None):
+    """Render the clinician workspace record; never present AI text as signed."""
+    e = html.escape
+    if not isinstance(data, dict) or not data:
+        return (f'<h2 class="group">Clinical rationale — clinician review required</h2>'
+                f'<p class="muted">No clinical intake or rationale recorded for this session. '
+                f'<a href="/clinical/{sid}">Open the clinical workspace</a> to document intake, '
+                f'generate an evidence-linked draft and sign the note.</p>')
+    intake = data.get("intake") or {}
+    draft = data.get("ai_draft") or {}
+    review = data.get("review") or {}
+    risk = summary.get("risk") or {}
+    out = ['<h2 class="group">Clinical rationale — clinician review required</h2>',
+           '<p class="caveat">This section separates deterministic screening, an AI-written draft, '
+           'and the clinician-authored note. Only the signed clinician note is the clinical record. '
+           'The app is not a medical device and does not diagnose.</p>']
+    flags = intake.get("red_flags") or []
+    if flags:
+        out.append('<div class="drill" style="border-color:#8b2f2f;background:#2a1414">'
+                   '<b>Red flags documented:</b><ul>'
+                   + ''.join(f'<li>{e(str(x))}</li>' for x in flags)
+                   + '</ul>Clinician evaluation is required before exercise or loading advice. '
+                     'The AI draft is not allowed to attribute these to a diagnosis.</div>')
+    # Screening flags are deterministic; the existing risk table above remains the source.
+    out.append(f'<p class="muted">Screening risk level: <b>{e(str(risk.get("level") or "—"))}</b> '
+               f'({e(str(risk.get("points") if risk.get("points") is not None else "—"))} points). '
+               'This is a heuristic, not a diagnosis.</p>')
+    # Evidence actually cited by the draft plus the screening flags.
+    ids = set()
+    for item in (draft.get("findings") or []):
+        ids.update(str(x) for x in (item.get("evidence_ids") or []))
+    for flag in (risk.get("flags") or []):
+        if isinstance(flag, dict):
+            ids.update(str(x) for x in (flag.get("evidence_ids") or []))
+    catalogue = (clinical.load_evidence().get("items") or [])
+    selected = [item for item in catalogue if str(item.get("id")) in ids]
+    if not selected:
+        selected = catalogue[:12]
+    if selected:
+        rows = ''.join(
+            f'<tr><td>{e(str(item.get("id")))}</td><td>{e(str(item.get("claim")))}</td>'
+            f'<td>{e(str(item.get("source")))} {e(str(item.get("year") or ""))}'
+            f'{(" · " + e(str(item.get("doi")))) if item.get("doi") else ""}</td>'
+            f'<td>{e(str(item.get("grade") or ""))}</td></tr>'
+            for item in selected)
+        out.append('<h2>Evidence cited</h2><table><tr><th>ID</th><th>Claim</th>'
+                   '<th>Source</th><th>Grade</th></tr>' + rows + '</table>'
+                   '<p class="muted">Evidence grades are review aids. Applicability and '
+                   'interpretation remain the clinician\'s responsibility.</p>')
+    # AI draft.
+    out.append('<h2>AI clinical rationale draft — not signed</h2>')
+    if draft.get("status") == "draft":
+        out.append(f'<div class="coach"><b>AI draft · {e(str(draft.get("model") or ""))} · '
+                   f'{e(str(draft.get("generated_at") or ""))}</b><p>{e(str(draft.get("summary") or ""))}</p>')
+        fs = draft.get("findings") or []
+        if fs:
+            out.append('<ul>' + ''.join(
+                f'<li><b>{e(str(x.get("finding") or ""))}</b> — {e(str(x.get("interpretation") or ""))} '
+                f'<span class="muted">[{e(", ".join(str(i) for i in (x.get("evidence_ids") or [])))}]</span></li>'
+                for x in fs if isinstance(x, dict)) + '</ul>')
+        qs = draft.get("clinical_questions") or []
+        if qs:
+            out.append('<p><b>Questions for the clinician:</b></p><ul>' +
+                       ''.join(f'<li>{e(str(x))}</li>' for x in qs) + '</ul>')
+        cannot = draft.get("cannot_conclude") or []
+        if cannot:
+            out.append('<p><b>What cannot be concluded:</b></p><ul>' +
+                       ''.join(f'<li>{e(str(x))}</li>' for x in cannot) + '</ul>')
+        if draft.get("red_flag_note"):
+            out.append(f'<p class="caveat">{e(str(draft.get("red_flag_note")))}</p>')
+        out.append(f'<p class="muted">{e(str(draft.get("disclaimer") or clinical.DISCLAIMER))}</p></div>')
+    elif draft:
+        out.append('<div class="drill"><b>AI draft withheld</b><ul>' +
+                   ''.join(f'<li>{e(str(x))}</li>' for x in (draft.get("issues") or [])) +
+                   '</ul><p class="muted">Unsafe or invalid AI text is never rendered. '
+                   'The deterministic findings and evidence remain available.</p></div>')
+    else:
+        out.append(f'<p class="muted">No AI draft has been generated. '
+                   f'<a href="/clinical/{sid}">Open the clinical workspace</a>.</p>')
+    # Serial patient-reported outcomes (raw values; no interpretation).
+    try:
+        sess = store.get_session(sid) if store is not None else None
+        rows = store.patient_sessions(int(sess["patient_id"]), limit=30) if sess else []
+    except Exception:
+        rows = []
+    outcome_rows = []
+    for row in reversed(rows):
+        try:
+            c = store.read_json(int(row["id"]), "clinical.json") or {}
+        except Exception:
+            c = {}
+        proms = (c.get("intake") or {}).get("proms") or {}
+        if not proms:
+            continue
+        outcome_rows.append(
+            f'<tr><td>{e(str(row.get("started_ts") or "")[:16])}</td>'
+            f'<td>{e(str(proms.get("LEFS", "—")))}</td>'
+            f'<td>{e(str(proms.get("NPRS", "—")))}</td>'
+            f'<td>{e(str(proms.get("OSTRC", "—")))}</td>'
+            f'<td>{e(str(proms.get("VISA", "—")))}</td></tr>')
+    if outcome_rows:
+        out.append('<h2>Patient-reported outcomes over sessions</h2>'
+                   '<table><tr><th>Session</th><th>LEFS (0–80)</th>'
+                   '<th>NPRS (0–10)</th><th>OSTRC (0–100)</th>'
+                   '<th>VISA (0–100)</th></tr>' + ''.join(outcome_rows)
+                   + '</table><p class="muted">Raw scores shown for the clinician; '
+                     'no change thresholds are applied automatically.</p>')
+    # Clinician note.
+    out.append('<h2>Clinician assessment, plan and signature</h2>')
+    if review.get("status") == "signed":
+        out.append(f'<div class="coach"><p><b>{e(str(review.get("clinician_name") or ""))}</b> · '
+                   f'{e(str(review.get("credentials") or ""))}'
+                   f'{(" · " + e(str(review.get("license_id")))) if review.get("license_id") else ""}'
+                   f' · signed {e(str(review.get("signed_at") or ""))} · v{e(str(review.get("version") or 1))}</p>'
+                   f'<p><b>Assessment</b><br>{e(str(review.get("assessment") or "")).replace(chr(10), "<br>")}</p>'
+                   + (f'<p><b>Differential considerations</b><br>{e(str(review.get("differential"))).replace(chr(10), "<br>")}</p>' if review.get("differential") else "")
+                   + f'<p><b>Plan</b><br>{e(str(review.get("plan") or "")).replace(chr(10), "<br>")}</p>'
+                   + (f'<p><b>Patient education</b><br>{e(str(review.get("patient_education"))).replace(chr(10), "<br>")}</p>' if review.get("patient_education") else "")
+                   + (f'<p><b>Follow-up</b><br>{e(str(review.get("follow_up"))).replace(chr(10), "<br>")}</p>' if review.get("follow_up") else "")
+                   + (f'<p><b>Outcomes at this visit</b><br>{e(str(review.get("outcomes"))).replace(chr(10), "<br>")}</p>' if review.get("outcomes") else "")
+                   + f'<p class="muted">{e(str(review.get("disclaimer") or clinical.REVIEW_DISCLAIMER))}</p></div>')
+    else:
+        stale = review.get("status") == "stale"
+        out.append(f'<p class="caveat"><b>{"SIGNATURE INVALIDATED — RE-REVIEW REQUIRED." if stale else "UNSIGNED — NOT A CLINICAL RECORD."}</b> '
+                   f'<a href="/clinical/{sid}">Complete and sign the clinical note in the workspace</a>.</p>')
+    out.append(f'<p class="noprint"><a class="btn" href="/clinical/{sid}">Open clinical workspace</a></p>')
+    return ''.join(out)
+
+
 def build(sid: int, store: Store) -> str:
     """Build report.html + summary.json for a finished session. Returns path."""
     sess = store.get_session(sid)
@@ -291,6 +421,8 @@ def build(sid: int, store: Store) -> str:
                                           encoding="utf-8")
 
     coach = store.read_json(sid, "coach.json")
+    clinical_data = store.read_json(sid, "clinical.json") or {}
+    clinical_section = _clinical_section(clinical_data, sid, summary, store)
     plane = summary.get("view_plane") or sess.get("view_plane") or config.DEFAULT_VIEW_PLANE
     not_assessed = summary.get("not_assessed") or {}
 
@@ -442,11 +574,11 @@ async function runCoach() {{
         disc_label = ("cycling position analysis — "
                       + config.BIKE_LABELS.get(bike_type, bike_type))
         coach_title, clinical_title = ("Coach review — cycling position & fit",
-                                       "Clinical review — chiropractic & physical therapy")
+                                       "Clinical screening — requires clinician review")
     else:
         disc_label = "running form analysis"
         coach_title = "Coach review — running technique"
-        clinical_title = "Clinical review — chiropractic & physical therapy"
+        clinical_title = "Clinical screening — requires clinician review"
 
     # cycling position table + suggestions
     bike_rows = ""
@@ -787,6 +919,7 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
 <style>
  body {{ font-family: system-ui, 'Segoe UI', sans-serif; background:#101418; color:#e8edf2;
         margin:0; padding:24px; }}
+ a {{ color:#7dd3fc; }}
  h1 {{ font-size:20px; margin:0 0 4px; }}
  h2 {{ font-size:15px; margin:26px 0 8px; color:#9fd3ff; }}
  h2.group {{ font-size:17px; margin:30px 0 10px; color:#7dd3fc;
@@ -842,12 +975,11 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
 <div class="cards">{card_html}</div>
 
 <h2 class="group">{esc(clinical_title)}</h2>
-<h2>Injury risk stratification — {esc(risk.get("level"))} ({esc(risk.get("points"))} pts)</h2>
+<h2>Injury risk screening — {esc(risk.get("level"))} ({esc(risk.get("points"))} pts)</h2>
 {"<ul>" + risk_flags + "</ul>" if risk_flags else '<p class="muted">No risk flags were triggered by the measured metrics.</p>'}
-<div class="drill"><b>Prescribed PT drills for the flagged findings</b>
-{"<ul>" + drills + "</ul>" if drills else '<div class="muted">No drills — nothing flagged.</div>'}
-</div>
-<p class="caveat">{esc(risk.get("caveat") or advisor.EVIDENCE_CAVEAT)}</p>
+<p class="muted">Automated drill suggestions are intentionally not shown in the clinical report. The clinician-authored plan below is the recommendation; screening flags are observations, not a prescription.</p>
+<p class="caveat">{esc(risk.get("caveat") or advisor.EVIDENCE_CAVEAT)} This section is rule-based, not AI and not a clinician-authored plan; a licensed clinician must review it.</p>
+{clinical_section}
 
 <h2>Gait event keyframes ({len(kfs)})</h2>
 {('<div class="kfgrid">' + kf_html + '</div>') if kf_html else '<p class="muted">' + esc(kf_note) + '</p>'}

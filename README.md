@@ -159,9 +159,12 @@ Improved / Neutral / Regressed badges.
 Everything is stored under `data/sessions/<id>/`:
 
 - `report.html` — summary cards, **overall Form score (0–100)**, **injury-risk
-  strata (Low / Moderate / Elevated / High)** with PT drill prescriptions,
-  joint table, symmetry, form bands vs reference bands, gait keyframes, charts,
-  a **Print / Save as PDF** button (A4/Letter print CSS), AI review
+  screening strata (Low / Moderate / Elevated / High)**, joint table, symmetry,
+  form bands vs reference bands, gait keyframes, charts, a **Print / Save as PDF**
+  button (A4/Letter print CSS), AI form review, and the separate
+  **clinical rationale / signed clinician note** section. Automated drill
+  suggestions are intentionally not printed; the clinician's plan is the
+  recommendation.
 - `metrics.csv` — full per-frame timeseries (all legacy columns preserved)
 - `summary.json` — includes `form_score`, `risk`, and honesty notes
 - `chart_*.png`, `frame_*.jpg` (annotated snapshots), `keyframes/` (gait phases)
@@ -183,13 +186,38 @@ API — cloud provider or local server — with `AI_API_URL` / `AI_API_KEY` /
 that provider, so pick a vision-capable model. The first local call loads the
 model (~40 s) and the whole review can take 1–3 minutes.
 
+## Clinical rationale (clinician-in-the-loop)
+
+The running report has a separate clinical workflow, opened from the session
+row (`clinical`) or from the report:
+
+- **Intake** — history, pain/NRS, training load, red flags, examination, imaging/labs,
+  medications, goals and PROMs (LEFS, NPRS, OSTRC, VISA; free text for others).
+- **Deterministic findings** — every measured metric, its view plane, confidence,
+  screening flag and evidence ID. The app never invents a missing value.
+- **Evidence catalogue** — `clinical_evidence.json`; running claims are drawn from
+  `research/RUNNING-CLINICAL-EVIDENCE.md` (30 verified sources, R01–R30) and
+  cycling claims from `research/CYCLING-TT-FIT-EVIDENCE.md`.
+- **AI draft** — local `qwen3.8:latest` receives only de-identified findings and
+  the evidence catalogue; it must return strict JSON with evidence IDs. An output
+  guard withholds the draft if it makes a diagnosis, prescribes treatment, predicts
+  outcome or names a condition as present. The draft is labelled **not signed**.
+- **Clinician assessment/plan/signature** — authored only by the clinician; the
+  signed note is the clinical record. PROMs are shown serially across sessions.
+- Nothing is sent to a cloud provider unless `AI_API_URL` is explicitly configured;
+  do not configure it for PHI without consent and a BAA.
+
+**Boundary:** this is decision support, not a medical device and not a diagnosis.
+The AI is a drafting assistant; the clinician reviews, edits, accepts/rejects and
+signs. See `docs/CLINICAL-RATIONALE.md` for the workflow and checklist.
+
 ## Tests
 
 ```
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-323 tests: metrics + biomechanics math (including non-square aspect correction),
+342 tests: metrics + biomechanics math (including non-square aspect correction),
 1-Euro filter, synthetic gait-cycle ground-truth latching, cycling/TT live-fit
 and overlay, advisor scoring/compare, storage, real-video pipeline, second-view
 (rear + side) analysis and report, report/API endpoints.

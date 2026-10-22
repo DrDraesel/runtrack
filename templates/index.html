@@ -1002,6 +1002,7 @@ async function loadHistory() {
       `<td><button class="ghost" style="padding:2px 7px;font-size:11px" onclick="pick('${s.id}','a')">A</button> ` +
       `<button class="ghost" style="padding:2px 7px;font-size:11px" onclick="pick('${s.id}','b')">B</button></td>` +
       `<td style="white-space:nowrap"><a href="/report/${s.id}/" target="_blank">open</a> ` +
+      `<a href="/clinical/${s.id}" target="_blank" title="clinical rationale workspace">clinical</a> ` +
       `<a href="/report/${s.id}/" target="_blank" title="print / save as PDF">🖨</a> ` +
       `<button class="ghost" style="padding:2px 7px;font-size:11px" onclick="editSession(${s.id})">✎</button></td>`;
     tb.appendChild(tr);
@@ -1420,7 +1421,8 @@ async function poll() {
   if (d.last_report_sid && d.last_report_sid !== lastReportSeen) {
     lastReportSeen = d.last_report_sid;
     $("reportBox").innerHTML = "<b>Report ready:</b> <a href='/report/" + d.last_report_sid +
-      "/' target='_blank'>open session #" + d.last_report_sid + "</a>";
+      "/' target='_blank'>open session #" + d.last_report_sid + "</a> · " +
+      "<a href='/clinical/" + d.last_report_sid + "' target='_blank'>clinical rationale</a>";
     banner("Report ready for session #" + d.last_report_sid, "info");
     refreshSessions();
   }
