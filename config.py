@@ -292,5 +292,10 @@ DEPTH_WARMUP = 8                # framesets to drop before the stream is trusted
 RIG_CHECK_ENABLED = True
 RIG_CHECK_INTERVAL_S = 1.0      # seconds between re-scores of each view
 
+# ------------------------------------------------------- multi-camera calibration
+# Written by tools/calibrate.py from a printed chessboard; see calibration.py for
+# the world frame and its limits.  Absent file = every view stays independent.
+CALIBRATION_PATH = DATA_DIR / "calibration.json"
+
 for d in (DATA_DIR, SESSIONS_DIR, UPLOADS_DIR, MODELS_DIR):
     d.mkdir(parents=True, exist_ok=True)

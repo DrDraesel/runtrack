@@ -25,6 +25,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 import advisor
 import ai_backend
 import clinical
+import calibration as CAL
 import cameras
 import config
 import cycling as CY
@@ -1026,6 +1027,30 @@ def api_cameras():
     cams = cameras.list_usb_cameras()
     _CAM_CACHE["cams"] = cams
     return jsonify({"cameras": cams, "preferred": cameras.preferred_camera(cams)})
+
+
+@app.get("/api/calibration")
+def api_calibration():
+    """Calibration status for the operator.
+
+    A missing or stale file is information, not an error: the app keeps working
+    per-view and simply has no fused 3D metrics.  ``quality`` says why.
+    """
+    doc = CAL.load(config.CALIBRATION_PATH)
+    verdict = CAL.quality(doc)
+    payload = {"ok": bool(doc), "path": str(config.CALIBRATION_PATH),
+               "quality": verdict}
+    if doc:
+        payload["created"] = doc.get("created")
+        payload["board"] = doc.get("board")
+        payload["views"] = {
+            role: {"baseline_m": cam.get("baseline_m"),
+                   "stereo_rms_px": cam.get("stereo_rms_px"),
+                   "rms_px": cam.get("rms_px"),
+                   "image_size": cam.get("image_size")}
+            for role, cam in (doc.get("views") or {}).items()
+        }
+    return jsonify(payload)
 
 
 @app.post("/api/camera/open")
