@@ -75,6 +75,10 @@ class PoseEngine:
         # mask share of the frame from the most recent detection (None when
         # segmentation is off or no pose was found) — used for frontal-area
         self.seg_frac = None
+        # 3D landmarks in metres, hip-centred (MediaPipe pose_world_landmarks).
+        # Kept as an attribute instead of changing detect()'s return type, so
+        # every existing caller keeps working; None when unavailable.
+        self.last_world = None
 
     def _seg_frac(self, res) -> float | None:
         if not self.seg_enabled:
@@ -116,6 +120,8 @@ class PoseEngine:
         self._last_ts = ts
         res = self._lm.detect_for_video(mp_img, ts)
         self.seg_frac = self._seg_frac(res)
+        self.last_world = (self._array(res.pose_world_landmarks[0])
+                           if getattr(res, "pose_world_landmarks", None) else None)
         if not res.pose_landmarks:
             return None
         return self._array(res.pose_landmarks[0])
@@ -132,6 +138,8 @@ class PoseEngine:
                           data=np.ascontiguousarray(rgb))
         res = self._lm.detect(mp_img)
         self.seg_frac = self._seg_frac(res)
+        self.last_world = (self._array(res.pose_world_landmarks[0])
+                           if getattr(res, "pose_world_landmarks", None) else None)
         if not res.pose_landmarks:
             return None
         return self._array(res.pose_landmarks[0])

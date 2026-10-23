@@ -4,6 +4,7 @@ Sources:
   usb   - local USB / built-in camera via DirectShow (Media Foundation fallback)
   url   - phone IP-camera or any MJPEG/RTSP stream URL
   file  - a video file (e.g. recorded on a phone)
+  depth - Intel RealSense colour+depth via the SDK (aligned, metric scale)
 
 External USB/UVC cameras are supported (incl. Microsoft LifeCams). Up to
 MAX_INDEX indexes are scanned; friendly device names come from pygrabber
@@ -16,6 +17,8 @@ import re
 import time
 
 import cv2
+
+import config
 
 MAX_INDEX = 8
 
@@ -308,6 +311,27 @@ def open_source(kind: str, index: int | None = None, url: str | None = None,
         if not p.exists():
             return None
         return cv2.VideoCapture(str(p)) if cv2.VideoCapture(str(p)).isOpened() else None
+    if kind == "depth":
+        # RealSense SDK source: colour AND depth from one aligned pipeline.
+        # Same duck-typed shape as a cv2 capture (read/get/set/release) plus
+        # latest_depth()/depth_at()/intrinsics for metric-scale metrics.
+        if not getattr(config, "DEPTH_ENABLED", True):
+            return None
+        try:
+            from depth import DepthSource
+        except Exception:
+            return None
+        ds = DepthSource(width=width or getattr(config, "DEPTH_WIDTH", 640),
+                         height=height or getattr(config, "DEPTH_HEIGHT", 480),
+                         fps=getattr(config, "DEPTH_FPS", 30),
+                         warmup=getattr(config, "DEPTH_WARMUP", 8))
+        if ds.isOpened():
+            return ds
+        try:
+            ds.release()
+        except Exception:
+            pass
+        return None
     return None
 
 
@@ -320,4 +344,6 @@ def source_label(kind: str, index=None, url=None, path=None, **_ignored) -> str:
         return f"Stream {url}"
     if kind == "file":
         return f"File {Path(path).name}"
+    if kind == "depth":
+        return "RealSense depth (aligned)"
     return "unknown"

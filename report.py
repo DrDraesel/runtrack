@@ -756,6 +756,30 @@ reported side by side and are not averaged into one number.</p>
 sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from the side clip.</p>
 """
 
+    # ---- depth metrics (metric-scale foot values from the depth view) ----
+    dg = summary.get("depth_gait") or {}
+    dg_section = ""
+    if dg:
+        def _dg(v, unit=""):
+            return "—" if v is None else f"{v:g}{unit}"
+
+        dg_section = f"""
+<h2>Depth metrics — metric-scale foot measures ({esc(summary.get('source2_label') or 'depth camera')})</h2>
+<p class="muted" style="font-size:12.5px">Measured with the RealSense depth stream, sampled at the foot
+landmarks: distances are in centimetres instead of frame fractions. Every figure is a
+<b>median over {_fmt(dg.get('frames_with_depth'))} depth frames</b> (step width over
+{_fmt(dg.get('step_width_n'), ' contacts')}). Per-frame depth noise is 3-4 cm at 2.5-3 m, so no single
+frame is a measurement, and step width is a contact-to-contact proxy, not a force-plate value.</p>
+<table><tr><th>Metric</th><th>Value</th><th>Sample</th></tr>
+<tr><td>Step width (contact to contact)</td><td>{_dg(dg.get('step_width_cm'), ' cm')}</td><td>{_fmt(dg.get('step_width_n'), ' steps')}</td></tr>
+<tr><td>Foot progression angle — left</td><td>{_dg(dg.get('fpa_left_deg'), '°')}</td><td>{_fmt(dg.get('fpa_n_left'), ' frames')}</td></tr>
+<tr><td>Foot progression angle — right</td><td>{_dg(dg.get('fpa_right_deg'), '°')}</td><td>{_fmt(dg.get('fpa_n_right'), ' frames')}</td></tr>
+<tr><td>Left/right FPA difference</td><td>{_dg(dg.get('fpa_asymmetry_deg'), '°')}</td><td>—</td></tr>
+<tr><td>Lateral ankle separation (not step width)</td><td>{_dg(dg.get('lateral_separation_cm'), ' cm')}</td><td>per frame</td></tr>
+<tr><td>Distance to the feet</td><td>{_dg(dg.get('distance_m'), ' m')}</td><td>median</td></tr>
+</table>
+<p class="muted" style="font-size:12px">{esc(dg.get('depth_note') or '')}</p>
+"""
     # ---- third view (front camera): own clip, own plane, own score -------
     sv3 = summary.get("third_view") or {}
     sv3_plane = str(sv3.get("view_plane") or summary.get("plane3") or "").lower()
@@ -1082,6 +1106,7 @@ landmark was rarely visible; do not interpret that joint.</p>
 {rear_section}
 {sv_section}
 {sv3_section}
+{dg_section}
 {aero_section}
 
 <h2 class="group">{esc(coach_title)}</h2>

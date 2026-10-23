@@ -232,11 +232,19 @@
           Femto Mega RGB as the <b>side</b> camera (sagittal) and the RealSense 455f RGB as the
           <b>front</b> view (frontal), both at 1280×720, both streaming in the same session.
           Finds them by name, so it survives index changes after a replug.</div>
+        <button class="big ghost" id="btnLabRigDepth" onclick="labRigDepth()">📐 Lab rig + depth — Femto side + RealSense depth front</button>
+        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Same rig, but the RealSense is
+          opened through its SDK so colour and <b>depth</b> arrive pixel-aligned in one pipeline —
+          that is what turns landmark pixels into metres (step width, foot progression, 3D angles).
+          Runs at 640×480 on this unit even over the USB 2.1 link (~20 fps measured); 848×480 and
+          above need USB 3. If the SDK cannot start the pipeline the open fails rather than
+          silently substituting the colour-only UVC pin.</div>
         <label>Source type</label>
         <select id="camKind" onchange="kindChanged()">
           <option value="usb">USB camera (built-in / external)</option>
           <option value="url">Phone camera stream (URL)</option>
           <option value="file">Video file (MP4 / MOV / WebM)</option>
+          <option value="depth">RealSense depth (aligned colour + depth)</option>
         </select>
         <div id="usbBox">
           <label>Camera</label>
@@ -267,6 +275,7 @@
             <option value="usb">USB camera (external)</option>
             <option value="url">Phone camera stream (URL)</option>
             <option value="file">Video file</option>
+            <option value="depth">RealSense depth (aligned colour + depth)</option>
           </select>
           <label>Second view plane * (which metrics it assesses)</label>
           <div class="planeRow">
@@ -298,6 +307,7 @@
             <option value="usb">USB camera (external)</option>
             <option value="url">Phone camera stream (URL)</option>
             <option value="file">Video file</option>
+            <option value="depth">RealSense depth (aligned colour + depth)</option>
           </select>
           <label>Third view camera facing (front / rear of the runner)</label>
           <div class="planeRow">
@@ -337,6 +347,13 @@
         <div class="row" style="margin-top:12px">
           <button onclick="openCamera()">Open camera(s)</button>
           <button class="ghost" onclick="closeCamera()">Close</button>
+        </div>
+        <div id="rigCard" style="display:none; margin-top:14px; border-top:1px solid #2a3441; padding-top:10px">
+          <label style="margin-top:0">Placement check (live)</label>
+          <div class="muted" style="font-size:11.5px">Framing, body coverage, camera pitch and
+            resolution per view. Move the camera until every view reads OK. A pass means the view is
+            usable — it never makes a joint angle clinically valid.</div>
+          <div id="rigBody" style="margin-top:6px; font-size:12px; line-height:1.5"></div>
         </div>
       </div>
     </div>
@@ -741,6 +758,36 @@ async function labRigSetup() {
   return true;
 }
 
+// Same rig, but the RealSense opens through its SDK so colour+depth are
+// aligned in one pipeline.  Depth is what makes the frontal metrics metric.
+async function labRigDepth() {
+  banner("");
+  const r = await fetch("/api/cameras");
+  const d = await r.json();
+  const isRgb = c => !/depth|infrared|\bir\b/i.test(c.name || "");
+  const side = d.cameras.find(c => isRgb(c) && /orbbec|femto/i.test(c.name || ""));
+  if (!side) {
+    banner("Lab rig + depth needs the Femto RGB (side) — plug it in and Scan. Found: "
+           + (d.cameras.map(c => c.name).join(", ") || "nothing"), "err");
+    return false;
+  }
+  const payload = {
+    kind: "usb", index: side.index, width: 1280, height: 720,
+    source2: {kind: "depth", width: 640, height: 480},
+    plane2: "frontal"
+  };
+  const out = await jpost("/api/camera/open", payload);
+  if (!out.ok) { banner("Lab rig + depth failed: " + out.error, "err"); return false; }
+  $("camKind").value = "usb"; kindChanged();
+  $("usbIndex").value = side.index;
+  $("useCam2").checked = true;
+  $("cam2Box").style.display = "";
+  $("cam2Kind").value = "depth"; kind2Changed();
+  setPlane2("frontal");
+  banner("Lab rig open: " + out.source + " (side) + " + out.source2 + " (front, depth)", "ok");
+  return true;
+}
+
 function setDiscipline(p) {
   disciplinePlanned = p;
   $("btnRun").className = p === "running" ? "active" : "ghost";
@@ -792,6 +839,11 @@ async function openCamera() {
     const ud = await up.json();
     if (!ud.ok) { banner("Upload failed: " + ud.error, "err"); return false; }
     payload.path = ud.path;
+  } else if (kind === "depth") {
+    // SDK source: colour and depth from one aligned pipeline. 640x480 is the
+    // mode that fits this camera's USB 2.1 link at ~20 fps.
+    payload.width = 640;
+    payload.height = 480;
   }
   payload.seg = $("segPrimary").checked;
   // second camera (rear / frontal view) — independent source, same session
@@ -815,6 +867,9 @@ async function openCamera() {
       const ud2 = await up2.json();
       if (!ud2.ok) { banner("Second upload failed: " + ud2.error, "err"); return false; }
       p2.path = ud2.path;
+    } else if (k2 === "depth") {
+      p2.width = 640;
+      p2.height = 480;
     }
     payload.source2 = p2;
     payload.plane2 = plane2Planned;
@@ -840,6 +895,9 @@ async function openCamera() {
       const ud3 = await up3.json();
       if (!ud3.ok) { banner("Third upload failed: " + ud3.error, "err"); return false; }
       p3.path = ud3.path;
+    } else if (k3 === "depth") {
+      p3.width = 640;
+      p3.height = 480;
     }
     payload.source3 = p3;
     payload.plane3 = plane3Planned;
@@ -1317,6 +1375,35 @@ function updateCyclingFit(d, disc) {
     : "Waiting for 5 s of pedalling…";
 }
 
+function updateRig(rig) {
+  const card = $("rigCard"), body = $("rigBody");
+  if (!card || !body) return;
+  const keys = Object.keys(rig || {});
+  if (!keys.length) { card.style.display = "none"; body.innerHTML = ""; return; }
+  card.style.display = "";
+  const names = {"1": "side / primary", "2": "second view", "3": "third view"};
+  body.innerHTML = keys.sort().map(function (k) {
+    const v = rig[k] || {};
+    const ok = !!v.ok;
+    const bits = [];
+    if (v.px_per_m) bits.push(Math.round(v.px_per_m) + " px/m");
+    if (v.pitch_deg !== null && v.pitch_deg !== undefined)
+      bits.push("pitch " + Number(v.pitch_deg).toFixed(0) + "°");
+    if (v.coverage && v.coverage.lower !== undefined)
+      bits.push("lower body " + Math.round(v.coverage.lower * 100) + "%");
+    if (v.framing && v.framing.height_frac)
+      bits.push("fills " + Math.round(v.framing.height_frac * 100) + "%");
+    const warn = (v.warnings || []).map(function (w) {
+      return '<div style="color:#ffb74d">• ' + w + '</div>';
+    }).join("");
+    return '<div style="margin-bottom:6px"><b style="color:' + (ok ? "#5ad18a" : "#ff8a65")
+      + '">' + (ok ? "OK" : "FIX") + '</b> ' + (names[k] || ("view " + k))
+      + ' (' + (v.plane || "?") + ')'
+      + (bits.length ? '<div class="muted">' + bits.join(" · ") + '</div>' : "")
+      + warn + '</div>';
+  }).join("");
+}
+
 async function poll() {
   let d;
   try { d = await (await fetch("/api/state")).json(); } catch (e) { return; }
@@ -1330,6 +1417,7 @@ async function poll() {
   const btype = (d.session && d.session.bike_type) || d.bike_type || "";
   $("discPill").textContent = "discipline: " + disc + (disc === "cycling" && btype ? " (" + btype + ")" : "");
   updateCyclingFit(d, disc);
+  updateRig(d.rig || {});
   // second camera (rear / frontal view) — live feed + fps
   (function () {
     const pill = $("cam2Pill"), note = $("feed2note"), img = $("feed2");

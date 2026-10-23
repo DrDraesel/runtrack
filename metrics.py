@@ -55,6 +55,61 @@ def angle_deg(a, b, c) -> float | None:
     return math.degrees(math.acos(cosang))
 
 
+def angle_deg_3d(a, b, c) -> float | None:
+    """Included angle at vertex b formed by 3D points a-b-c, in degrees.
+
+    Used for MediaPipe ``pose_world_landmarks`` (metres, hip-centred).  A joint
+    angle is invariant to rotation and origin, so the coordinate convention of
+    the world frame does not have to be known to report it.
+    """
+    if a is None or b is None or c is None:
+        return None
+    v1 = (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    v2 = (c[0] - b[0], c[1] - b[1], c[2] - b[2])
+    n1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2 + v1[2] ** 2)
+    n2 = math.sqrt(v2[0] ** 2 + v2[1] ** 2 + v2[2] ** 2)
+    if n1 < 1e-9 or n2 < 1e-9:
+        return None
+    cosang = (v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]) / (n1 * n2)
+    cosang = max(-1.0, min(1.0, cosang))
+    return math.degrees(math.acos(cosang))
+
+
+def world_joint_angles(world, vis_min: float = 0.5) -> dict:
+    """3D knee / hip includes from pose_world_landmarks (metres).
+
+    Returns {} when the array is missing or too few joints are visible.  Keys
+    carry a ``_3d`` suffix so they never collide with the 2D metrics; they are
+    included angles (180 deg = straight), the same convention as the 2D table.
+    This removes the projection ambiguity of a 2D angle but adds depth/scale
+    noise - it is not an exact measurement.
+    """
+    if world is None:
+        return {}
+    try:
+        arr = world
+        if getattr(arr, "shape", (0,))[0] < 33:
+            return {}
+    except Exception:
+        return {}
+
+    def P(i):
+        if float(arr[i, 3]) < vis_min:
+            return None
+        return (float(arr[i, 0]), float(arr[i, 1]), float(arr[i, 2]))
+
+    out = {}
+    for side, hip, knee, ankle in (("l", 23, 25, 27), ("r", 24, 26, 28)):
+        v = angle_deg_3d(P(hip), P(knee), P(ankle))
+        if v is not None:
+            out[f"knee_{side}_3d"] = float(v)
+    for side, sh, hip, knee in (("l", 11, 23, 25), ("r", 12, 24, 26)):
+        v = angle_deg_3d(P(sh), P(hip), P(knee))
+        if v is not None:
+            out[f"hip_{side}_3d"] = float(v)
+    return out
+
+
 def _vis(lms, idx) -> bool:
     return float(lms[idx, 3]) >= VIS
 

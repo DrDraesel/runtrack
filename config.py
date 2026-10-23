@@ -276,5 +276,21 @@ SHOULDER_WIDTH_HEIGHT_FRACTION = 0.245    # biacromial breadth / height
 AIR_DENSITY_KGM3 = 1.225                   # sea level, 15 C
 AERO_CD_DEFAULT = 0.80                     # assumed drag coefficient (rider+bike)
 
+# --------------------------------------------------------------- depth source
+# The RealSense D455F's depth stream is the only depth that works on this rig
+# (the Femto sits on a USB 2.0 hub and its depth pipeline yields no frames).
+# Opening a camera as {"kind": "depth"} swaps it from DirectShow UVC onto the
+# SDK, so colour and depth come from one pipeline and are pixel-aligned: that
+# alignment is the precondition for turning landmark pixels into metres.
+DEPTH_ENABLED = True
+DEPTH_WIDTH, DEPTH_HEIGHT, DEPTH_FPS = 640, 480, 30
+DEPTH_WARMUP = 8                # framesets to drop before the stream is trusted
+
+# ------------------------------------------------------------- placement check
+# Per-view operator feedback (framing, coverage, pitch, px/m).  It is a
+# placement aid, not a metric gate: a passing check never makes an angle valid.
+RIG_CHECK_ENABLED = True
+RIG_CHECK_INTERVAL_S = 1.0      # seconds between re-scores of each view
+
 for d in (DATA_DIR, SESSIONS_DIR, UPLOADS_DIR, MODELS_DIR):
     d.mkdir(parents=True, exist_ok=True)

@@ -28,10 +28,12 @@ import clinical
 import cameras
 import config
 import cycling as CY
+import depth_metrics as DM
 import gait_events as GA
 import live_monitor
 import metrics as M
 import report as R
+import rigcheck as RC
 import second_view as SV
 from filters import LandmarkFilter
 from pose_engine import (PoseEngine, draw_cycling_overlay, draw_skeleton,
@@ -90,6 +92,9 @@ class Live:
         self.video_t = 0.0
         self.media = {}
         self.aspect = 16.0 / 9.0        # last processed frame width / height
+        # per-view placement check (framing/coverage/pitch/px-per-m), refreshed
+        # about once a second by the capture loop; operator feedback only
+        self.rig: dict = {}
 
     def reset(self):
         self.stop_evt = threading.Event()
@@ -104,6 +109,7 @@ class Live:
         self.seek_t = None
         self.video_t = 0.0
         self.media = {}
+        self.rig = {}
         self.latest_jpeg2 = None
         self.live2 = {}
         self.fps2 = 0.0
@@ -204,6 +210,7 @@ def _finalize(reason="complete"):
         direction3 = sess.get("direction3") or config.DEFAULT_DIRECTION3
         source3_label = sess.get("source3_label") or "none"
         source1_label = sess.get("source1_label") or "none"
+        depth_acc = sess.get("depth_acc")
     status = "complete" if reason == "complete" else "incomplete"
     try:
         if discipline == "running":
@@ -310,6 +317,15 @@ def _finalize(reason="complete"):
                 summary["plane3"] = tv.get("view_plane") or plane3
                 summary["source3_label"] = source3_label
                 summary["direction3"] = direction3
+        # ---- metric-scale foot metrics from the depth view (when present) ----
+        if depth_acc is not None:
+            try:
+                dg = depth_acc.summary()
+                if dg.get("frames_with_depth"):
+                    summary["depth_gait"] = dg
+            except Exception as e:
+                summary.setdefault("labels", []).append(
+                    f"depth metrics failed: {e}")
         # ---- synchronisation honesty: software clocks, no genlock ----
         views = [{"role": "primary", "label": source1_label, "rows": len(rows)}]
         if source2_label not in (None, "", "none"):
@@ -401,6 +417,10 @@ def _loop(src: dict):
                     L.warn2 = f"second camera could not be opened: {src2}"
             else:
                 engine2 = PoseEngine(config.MODEL_PATH, seg=bool(src2.get("seg")))
+        # metric-scale foot metrics are only meaningful when the view carries
+        # depth; a plain UVC camera yields none and the accumulator stays off
+        dgait = (DM.DepthGait()
+                 if (cap2 is not None and hasattr(cap2, "depth_at")) else None)
         # ------------------------------ optional simultaneous third (front) camera
         src3 = src.get("source3") or {}
         if src3:
@@ -426,6 +446,7 @@ def _loop(src: dict):
         fps, fps_n, fps_t = 0.0, 0, time.time()
         fps2, fps2_n, fps2_t = 0.0, 0, time.time()
         fps3, fps3_n, fps3_t = 0.0, 0, time.time()
+        rig_t = 0.0
         while not L.stop_evt.is_set():
             t_frame = time.monotonic()
             with L.lock:
@@ -516,6 +537,8 @@ def _loop(src: dict):
             # in the keyframe buffer for event detection / re-analysis
             lms = lf(lms_raw, t_mono) if lms_raw is not None else None
             fm = M.frame_metrics(lms, aspect=proc.shape[1] / proc.shape[0])
+            if fm:
+                fm.update(M.world_joint_angles(getattr(engine, "last_world", None)))
             if src.get("seg") and engine.seg_frac is not None:
                 fm["fa_frac"] = engine.seg_frac
             annotated = draw_skeleton(proc.copy(), lms)
@@ -540,6 +563,15 @@ def _loop(src: dict):
                     lms_raw2, ident2 = si2.update(lms_raw2, t_mono)
                 lms2 = lf2(lms_raw2, t_mono) if lms_raw2 is not None else None
                 fm2 = M.frame_metrics(lms2, aspect=proc2.shape[1] / proc2.shape[0])
+                if fm2:
+                    fm2.update(M.world_joint_angles(
+                        getattr(engine2, "last_world", None)))
+                if dgait is not None and lms2 is not None:
+                    try:
+                        fm2.update(dgait.update(lms2, cap2.depth_at,
+                                                cap2.intrinsics))
+                    except Exception:
+                        pass
                 if src2.get("seg") and engine2.seg_frac is not None:
                     fm2["fa_frac"] = engine2.seg_frac
                 annotated2 = draw_skeleton(proc2.copy(), lms2)
@@ -557,10 +589,45 @@ def _loop(src: dict):
                     lms_raw3, ident3 = si3.update(lms_raw3, t_mono)
                 lms3 = lf3(lms_raw3, t_mono) if lms_raw3 is not None else None
                 fm3 = M.frame_metrics(lms3, aspect=proc3.shape[1] / proc3.shape[0])
+                if fm3:
+                    fm3.update(M.world_joint_angles(
+                        getattr(engine3, "last_world", None)))
                 if src3.get("seg") and engine3.seg_frac is not None:
                     fm3["fa_frac"] = engine3.seg_frac
                 annotated3 = draw_skeleton(proc3.copy(), lms3)
                 overlay_angles(annotated3, lms3, fm3)
+
+            # ---- placement check (operator feedback, ~1 Hz per view) ----------
+            # Deliberately cheap: it re-scores the last landmarks, not the video.
+            # It can only say the framing/pitch preconditions are met; it never
+            # certifies a joint angle.
+            if config.RIG_CHECK_ENABLED:
+                now_rig = time.monotonic()
+                if now_rig - rig_t >= config.RIG_CHECK_INTERVAL_S:
+                    rig_t = now_rig
+                    rig = {}
+                    for key, plane, lms_v, fr, cap_v in (
+                            ("1", L.view_plane, lms, frame, cap),
+                            ("2", L.plane2, lms2, frame2, cap2),
+                            ("3", L.plane3, lms3, frame3, cap3)):
+                        if fr is None:
+                            continue
+                        try:
+                            hh, ww = fr.shape[:2]
+                            dstat = (cap_v.depth_stats()
+                                     if hasattr(cap_v, "depth_stats") else None)
+                            intr = getattr(cap_v, "intrinsics", None)
+                            pitch = (cap_v.floor_pitch_deg()
+                                     if hasattr(cap_v, "floor_pitch_deg") else None)
+                            rig[key] = RC.check_view(
+                                plane, lms_v, ww, hh, depth=dstat,
+                                intrinsics=intr, pitch_deg=pitch)
+                        except Exception as exc:      # never kill the stream
+                            rig[key] = {"ok": False, "plane": plane,
+                                        "warnings": [f"rig check failed: {exc}"],
+                                        "notes": []}
+                    with L.lock:
+                        L.rig = rig
 
             fps_n += 1
             now = time.time()
@@ -652,6 +719,8 @@ def _loop(src: dict):
                     if jump:
                         row["seek_jump"] = 1
                     run["rows"].append(row)
+                    if dgait is not None and run.get("depth_acc") is None:
+                        run["depth_acc"] = dgait
                     # ---- second view: own rows, own clock, analysed at finalize
                     if frame2 is not None and fm2:
                         if is_file2 and vt2 is not None:
@@ -877,6 +946,7 @@ def _build_state() -> dict:
             "seg2": bool(L.seg2),
             "has_camera2": bool(L.source2),
             "has_camera3": bool(L.source3),
+            "rig": dict(L.rig or {}),
             "discipline": disc,
             "bike_type": L.bike_type,
             "bike_live": _live_bike(sess, disc, run),
@@ -915,6 +985,21 @@ def _build_state() -> dict:
 @app.get("/api/state")
 def api_state():
     return jsonify(_build_state())
+
+
+@app.get("/api/rig/check")
+def api_rig_check():
+    """Placement verdict per open view (framing, coverage, pitch, px/m).
+
+    Operator aid while moving a camera: no session and no landmarks are
+    required.  A passing check means the view is framed correctly, never that
+    a joint angle is clinically valid.
+    """
+    with L.lock:
+        rig = dict(L.rig or {})
+    ok = bool(rig) and all(bool(v.get("ok")) for v in rig.values()
+                           if isinstance(v, dict))
+    return jsonify({"ok": ok, "views": rig, "active": bool(L.active)})
 
 
 _CAM_CACHE = {"cams": None}
@@ -972,6 +1057,17 @@ def api_camera_open():
             if not Path(path).exists():
                 return "file not found"
             return {"kind": "file", "path": path}
+        if k == "depth":
+            # RealSense SDK source (colour + aligned depth).  No index: this
+            # build has one RealSense, and the SDK enumerates it itself.
+            src = {"kind": "depth"}
+            try:
+                w, h = int(d.get("width") or 0), int(d.get("height") or 0)
+            except (TypeError, ValueError):
+                w = h = 0
+            if 160 <= w <= 4096 and 120 <= h <= 2160:
+                src["width"], src["height"] = w, h
+            return src
         return "bad kind"
 
     src = _parse_source(data)
