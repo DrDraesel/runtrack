@@ -239,3 +239,43 @@ contains its own metric table, its own `not_assessed` rows, its own form score,
 its own risk flags, the plane-gating note, and — when `multi_view_sync` exists —
 the per-view frame-count line. The second-view block is untouched: existing
 two-camera sessions render exactly as before.
+
+---
+
+## 10. This room — measured rig and target positions (TRUE Alpine Runner)
+
+Measured on the installation 2026-10-23 from the live feeds, not from spec sheets.
+Machine: TRUE Alpine Runner, deck 152 × 56 cm, footprint 180–206 × 101 cm,
+grade −3 % to +30 %.
+
+### As found (before re-aiming)
+
+| View | Camera | Distance | Lens height | Aim | What it costs |
+|---|---|---|---|---|---|
+| Side (primary) | Femto RGB 1280×720 | ~2 m, behind-right | ~1.0–1.1 m | rear-right oblique, ~30–40° off the sagittal plane | trunk/shin/knee are projections of an oblique view; the console upright crosses the left third |
+| Front | RealSense 455f RGB (SDK: + depth) | ~1.1–1.5 m from the deck front corner | ~1.2 m | yawed ~20–25°, level | near deck fills the lower frame, runner off-centre, console arm in shot; step width foreshortened by the yaw |
+
+Both streams were healthy (`22 fps`, `error: null`) while framed like that — a green
+state proves nothing about aim. Depth on the 455f at 640×480: **85.8 % valid,
+fx 384.5 → 154 px/m at 2.5 m**, 22 fps alongside the Femto.
+
+### Target
+
+| View | Camera | Position | Aim | Metrics it gates |
+|---|---|---|---|---|
+| Side | Femto RGB + ToF (after moving the cable to a direct USB 3 port) | 2.4–2.8 m perpendicular to the belt centreline | lens 1.0–1.2 m, level 0° (5° max) | trunk, shin, knee, hip sagittal angles, cadence, oscillation, metric stride |
+| Front | RealSense 455f via the SDK (`source2: {kind:"depth"}`) | 3.0 m from the deck front edge on the centreline, **or** 2.5–3.0 m front-quarter, ≤15° yaw | 2.0–2.2 m high, pitched 12–18° down | pelvic drop, knee valgus, step width, foot progression (metric), crossover |
+| Rear | third camera (ordinary 720p) | 1.6–2.0 m behind, centred | lens 0.4–0.6 m, level to 5° up | heel strike, rearfoot eversion (proxy ±3–5°), lateral foot placement, crossover |
+
+Rules that matter more than the numbers:
+
+- **Perpendicular is literal.** A 10° yaw on the side view shortens the shank by
+  cos 10° = 1.5 % but reads as several degrees on knee flexion; 30° is fatal.
+- **Frame for 30 % grade.** The Alpine Runner lifts the deck 30 cm+ at the front and the
+  runner's head rises ~0.5 m; a frame that just fits at 0 % crops the head at 20 %.
+  Lock one grade for comparison sessions (1 % is the reference) and record it — the
+  metric bands are level-running norms and the app has no grade compensation.
+- **Do not use the deck as a level reference** for the depth pitch fit when the belt is
+  inclined; fit the room floor outside the machine.
+- **Clear the background.** A chair and a person at the desk sit inside the current front
+  frame; MediaPipe will lock onto whoever fits best when the runner is small or absent.
