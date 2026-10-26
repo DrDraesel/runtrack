@@ -227,11 +227,13 @@
           from the side and one from behind (or in front). The side clip is analysed for sagittal
           metrics, the rear clip for frontal metrics (pelvic drop, knee collapse, arm swing) — both in
           one session and one report.</div>
-        <button class="big" id="btnLabRig" onclick="labRigSetup()">🎯 Lab rig — Femto side + RealSense front</button>
-        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">One click: opens the Orbbec
-          Femto Mega RGB as the <b>side</b> camera (sagittal) and the RealSense 455f RGB as the
-          <b>front</b> view (frontal), both at 1280×720, both streaming in the same session.
-          Finds them by name, so it survives index changes after a replug.</div>
+        <button class="big" id="btnLabRig" onclick="labRigSetup()">🎯 Lab rig — side + front + rear</button>
+        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">One click: the best colour
+          camera goes on the <b>side</b> (Azure Kinect 4K at 1920×1080 when it is plugged in,
+          otherwise the Femto Mega at 1280×720 — the side view carries most of the metrics), the
+          remaining one on the <b>front</b> (frontal plane), and a third camera on the <b>rear</b>
+          if one is present. Finds them by name, so it survives index changes after a replug.
+          With only two cameras it opens side + front.</div>
         <button class="big ghost" id="btnLabRigDepth" onclick="labRigDepth()">📐 Lab rig + depth — Femto side + RealSense depth front</button>
         <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Same rig, but the RealSense is
           opened through its SDK so colour and <b>depth</b> arrive pixel-aligned in one pipeline —
@@ -299,8 +301,8 @@
           </div>
         </div>
         <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
-          <input type="checkbox" id="useCam3" style="width:auto"> <span>Third view (front camera) —
-          simultaneous front view</span></label>
+          <input type="checkbox" id="useCam3" style="width:auto"> <span>Third view (third camera) —
+          simultaneous third feed, usually the low rear view for feet</span></label>
         <div id="cam3Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
           <label>Third view source</label>
           <select id="cam3Kind" onchange="kind3Changed()">
@@ -720,41 +722,69 @@ async function refreshCams() {
   }
 }
 
-// One-click rig: Orbbec Femto Mega RGB on the side, RealSense RGB as the front
-// view. Looks the cameras up BY NAME (indices move when a device is replugged)
-// and requests 1280x720 on both — DirectShow silently keeps its default when a
-// pin does not expose the mode, so the read-back size in /api/state wins.
+/* One-click rig: best sensor on the SIDE (it carries most of the metrics), the
+   next colour camera on the FRONT (frontal plane), a third on the REAR when
+   present. Everything is found by NAME because DirectShow indices move on every
+   replug, and the size is requested per model — DirectShow silently keeps its
+   default when a pin does not expose the mode, so the read-back size in
+   /api/state wins. */
 async function labRigSetup() {
   banner("");
   const r = await fetch("/api/cameras");
   const d = await r.json();
   const isRgb = c => !/depth|infrared|\bir\b/i.test(c.name || "");
-  const side = d.cameras.find(c => isRgb(c) && /orbbec|femto/i.test(c.name || ""));
-  const front = d.cameras.find(c => isRgb(c) && /realsense/i.test(c.name || ""));
-  if (!side || !front) {
-    const missing = [];
-    if (!side) missing.push("Orbbec Femto Mega RGB (side)");
-    if (!front) missing.push("RealSense RGB (front)");
-    banner("Lab rig needs: " + missing.join(" and ") + ". Found: "
-           + (d.cameras.map(c => c.name).join(", ") || "nothing") + " — plug it in and Scan.", "err");
+  const rgb = (d.cameras || []).filter(isRgb);
+  const pick = re => rgb.find(c => re.test(c.name || ""));
+  const side = pick(/azure/i) || pick(/orbbec|femto/i) || pick(/realsense/i);
+  if (!side) {
+    banner("Lab rig needs at least one colour camera (Azure Kinect 4K, Orbbec Femto RGB or "
+           + "RealSense RGB). Found: " + (rgb.map(c => c.name).join(", ") || "nothing")
+           + " — plug it in and Scan.", "err");
     return false;
   }
-  const payload = {
-    kind: "usb", index: side.index, width: 1280, height: 720,
-    source2: {kind: "usb", index: front.index, width: 1280, height: 720},
-    plane2: "frontal"
-  };
+  const rest = rgb.filter(c => c !== side);
+  const front = rest.find(c => /orbbec|femto/i.test(c.name || ""))
+             || rest.find(c => /realsense/i.test(c.name || "")) || rest[0] || null;
+  const rear = rgb.find(c => c !== side && c !== front) || null;
+  const sizeFor = c => /azure/i.test(c.name || "") ? {width: 1920, height: 1080}
+                     : /realsense/i.test(c.name || "") ? {width: 640, height: 480}
+                     : {width: 1280, height: 720};
+  const sid = sizeFor(side);
+  const payload = {kind: "usb", index: side.index, width: sid.width, height: sid.height};
+  if (front) {
+    const f = sizeFor(front);
+    payload.source2 = {kind: "usb", index: front.index, width: f.width, height: f.height};
+    payload.plane2 = "frontal";
+  }
+  if (rear) {
+    payload.source3 = {kind: "usb", index: rear.index, width: 640, height: 480};
+    payload.plane3 = "frontal";
+    payload.direction3 = "rear";
+  }
   const out = await jpost("/api/camera/open", payload);
   if (!out.ok) { banner("Lab rig failed: " + out.error, "err"); return false; }
   // reflect the rig in the form so a later Open camera / Start reuses it
   $("camKind").value = "usb"; kindChanged();
   $("usbIndex").value = side.index;
-  $("useCam2").checked = true;
-  $("cam2Box").style.display = "";
-  $("cam2Kind").value = "usb"; kind2Changed();
-  $("usb2Index").value = front.index;
-  setPlane2("frontal");
-  banner("Lab rig open: " + out.source + " (side) + " + out.source2 + " (front)", "ok");
+  if (front) {
+    $("useCam2").checked = true;
+    $("cam2Box").style.display = "";
+    $("cam2Kind").value = "usb"; kind2Changed();
+    $("usb2Index").value = front.index;
+    setPlane2("frontal");
+  }
+  if (rear) {
+    $("useCam3").checked = true;
+    $("cam3Box").style.display = "";
+    $("cam3Kind").value = "usb"; kind3Changed();
+    $("usb3Index").value = rear.index;
+    setPlane3("frontal");
+    setDirection3("rear");
+  }
+  const parts = [out.source + " (side, " + sid.width + "×" + sid.height + ")"];
+  if (out.source2) parts.push(out.source2 + " (front)");
+  if (out.source3) parts.push(out.source3 + " (rear)");
+  banner("Lab rig open: " + parts.join(" + "), "ok");
   return true;
 }
 

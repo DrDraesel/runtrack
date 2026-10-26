@@ -33,6 +33,7 @@ import config  # noqa: E402
 import cycling as CY  # noqa: E402
 import gait_events as GA  # noqa: E402
 from filters import LandmarkFilter  # noqa: E402
+from pose_backends import make_backend  # noqa: E402
 from pose_engine import (PoseEngine, draw_skeleton, make_crop_refiner,  # noqa: E402
                          overlay_angles, person_crop_box)
 from side_identity import SideIdentity  # noqa: E402
@@ -131,8 +132,8 @@ def main():
         elif args.start > 0:
             cap2.set(cv2.CAP_PROP_POS_MSEC, args.start * 1000.0)
 
-    engine = PoseEngine(config.MODEL_PATH, seg=bool(args.seg))
-    engine2 = (PoseEngine(config.MODEL_PATH, seg=bool(args.seg2))
+    engine = make_backend(model_path=config.MODEL_PATH, seg=bool(args.seg))
+    engine2 = (make_backend(model_path=config.MODEL_PATH, seg=bool(args.seg2))
                if cap2 is not None else None)
     store = Store(config.DB_PATH)
     pid = store.upsert_patient(args.name, args.phone)

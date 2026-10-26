@@ -37,6 +37,7 @@ import report as R
 import rigcheck as RC
 import second_view as SV
 from filters import LandmarkFilter
+from pose_backends import make_backend
 from pose_engine import (PoseEngine, draw_cycling_overlay, draw_skeleton,
                          make_crop_refiner, overlay_angles, person_crop_box)
 from session_store import Store
@@ -407,7 +408,8 @@ def _loop(src: dict):
                 L.error = f"could not open source: {src}"
                 L.active = False
             return
-        engine = PoseEngine(config.MODEL_PATH, seg=bool(src.get("seg")))
+        engine = make_backend(model_path=config.MODEL_PATH,
+                              seg=bool(src.get("seg")))
         # ------------------------------ optional simultaneous second camera
         src2 = src.get("source2") or {}
         if src2:
@@ -417,7 +419,8 @@ def _loop(src: dict):
                 with L.lock:
                     L.warn2 = f"second camera could not be opened: {src2}"
             else:
-                engine2 = PoseEngine(config.MODEL_PATH, seg=bool(src2.get("seg")))
+                engine2 = make_backend(model_path=config.MODEL_PATH,
+                                       seg=bool(src2.get("seg")))
         # metric-scale foot metrics are only meaningful when the view carries
         # depth; a plain UVC camera yields none and the accumulator stays off
         dgait = (DM.DepthGait()
@@ -431,7 +434,8 @@ def _loop(src: dict):
                 with L.lock:
                     L.warn3 = f"third camera could not be opened: {src3}"
             else:
-                engine3 = PoseEngine(config.MODEL_PATH, seg=bool(src3.get("seg")))
+                engine3 = make_backend(model_path=config.MODEL_PATH,
+                                       seg=bool(src3.get("seg")))
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         is_file = src.get("kind") == "file"
         is_file2 = bool(src2) and src2.get("kind") == "file"
@@ -1169,7 +1173,14 @@ def api_camera_open():
     with L.lock:
         err = L.error
     if err:
-        return jsonify({"ok": False, "error": err}), 500
+        # A well-formed request whose camera is missing/unavailable is an
+        # environment problem, not a server fault: answer 400 with the reason so
+        # the UI can show it and a caller can tell "cannot open" from a bug.
+        if src.get("kind") == "depth" and "could not open" in str(err):
+            err = (f"{err} — RealSense depth needs the camera connected on a USB 3 "
+                   "port with a 5 Gbps cable (check the device before retrying).")
+        code = 400 if str(err).startswith("could not open") else 500
+        return jsonify({"ok": False, "error": err}), code
     return jsonify({"ok": True, "source": L.source_label,
                     "source2": L.source2_label, "source3": L.source3_label})
 

@@ -3,8 +3,9 @@
 Covers the two 2026-10-22 additions:
   * `cameras.open_source(width=, height=)` asks DirectShow for a mode BEFORE the
     first read (the front RealSense used to open at 640x480 by default).
-  * the one-click rig button that finds the Femto RGB (side) and the RealSense
-    RGB (front) by NAME and opens both in one session.
+  * the one-click rig button that finds the colour cameras by NAME and opens up
+    to three in one session (best sensor on the side, second on the front,
+    third on the rear), requesting a size per model.
 
 No camera is opened here: cv2 is faked, and the page is only rendered.
 """
@@ -95,24 +96,43 @@ class TestLabRigUI(unittest.TestCase):
             self.assertIn(marker, self.page)
 
     def test_rig_writes_the_payload_shape_the_backend_expects(self):
-        # the handler must post source2 + plane2 to the documented endpoint
+        # the handler must post source2/source3 + plane2/plane3 to the endpoint
         start = self.page.index("async function labRigSetup")
-        block = self.page[start:start + 2600]
+        end = self.page.index("async function labRigDepth")
+        block = self.page[start:end]
         self.assertIn('"/api/camera/open"', block)
         self.assertIn("source2", block)
-        self.assertIn('plane2: "frontal"', block)
-        self.assertIn("width: 1280", block)
+        self.assertIn("source3", block)
+        self.assertIn('plane2 = "frontal"', block)
+        self.assertIn('plane3 = "frontal"', block)
+        self.assertIn('direction3 = "rear"', block)
+        # a size is requested per model, never one hardcoded pair for every camera
+        self.assertIn("1920", block)
+        self.assertIn("1080", block)
+        self.assertIn("sizeFor", block)
         # must look cameras up by name, never by a hardcoded index
-        self.assertIn("orbbec|femto", block)
-        self.assertIn("realsense", block)
+        for name_re in ("/azure/i", "/orbbec|femto/i", "/realsense/i"):
+            self.assertIn(name_re, block)
+
+    def test_rig_puts_the_best_sensor_on_the_side(self):
+        start = self.page.index("async function labRigSetup")
+        end = self.page.index("async function labRigDepth")
+        block = self.page[start:end]
+        # the Azure is the highest-resolution colour stream, so it takes the
+        # side view (which carries most of the metrics) whenever it is present
+        self.assertIn('const side = pick(/azure/i) || pick(/orbbec|femto/i)', block)
 
     def test_rig_syncs_the_form_after_opening(self):
         start = self.page.index("async function labRigSetup")
-        block = self.page[start:start + 2600]
+        end = self.page.index("async function labRigDepth")
+        block = self.page[start:end]
         for marker in ('$("usbIndex").value = side.index',
                        '$("useCam2").checked = true',
                        '$("usb2Index").value = front.index',
-                       'setPlane2("frontal")'):
+                       'setPlane2("frontal")',
+                       '$("useCam3").checked = true',
+                       '$("usb3Index").value = rear.index',
+                       'setDirection3("rear")'):
             self.assertIn(marker, block)
 
 

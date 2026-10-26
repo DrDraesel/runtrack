@@ -48,6 +48,16 @@ STREAM_FPS = 15           # MJPEG stream pacing
 JPEG_QUALITY = 80
 TARGET_FPS = 60           # upper bound the pose model is asked to keep up with
 
+# ------------------------------------------------------------- pose backend
+# Which pose backend the app should use: "mediapipe" (default, in requirements)
+# or "rtmpose" (optional — needs rtmlib + onnxruntime, see
+# requirements-optional.txt).  pose_backends.py imports rtmlib lazily, so the
+# default path never touches the optional package.
+POSE_BACKENDS = ("mediapipe", "rtmpose")
+POSE_BACKEND = os.environ.get("RUNTRACK_POSE_BACKEND", "mediapipe").strip().lower()
+if POSE_BACKEND not in POSE_BACKENDS:
+    POSE_BACKEND = "mediapipe"
+
 DEFAULT_DURATION_S = 60   # default run session duration
 MAX_DURATION_S = 900
 MAX_UPLOAD_MB = 800
