@@ -222,18 +222,40 @@
 
       <div class="card">
         <h2>Camera</h2>
+        <button class="big" id="btnScanAssign" onclick="scanAndAssign()">🔍 Scan cameras &amp; assign roles</button>
+        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Finds every connected colour
+          camera and recommends a role: the best sensor on the <b>side</b> (it carries most of the
+          metrics), the next on the <b>front</b>, a third on the <b>rear</b>. Override any row below —
+          the choice is remembered per camera <b>name</b>, so it survives replugs and index shifts.
+          <b>▶ Start</b> activates every assigned camera, so you never record a session with one view
+          silently missing.</div>
+        <div id="rolePanel" style="display:none; margin-bottom:12px; border:1px solid #2a3441;
+             border-radius:8px; padding:9px 10px">
+          <div class="muted" style="font-size:11.5px; margin-bottom:2px">Camera location — tell the app
+            where each camera is: Side (sagittal, most metrics) · Front (frontal) · Rear (frontal, feet)
+            · Off.</div>
+          <div id="roleRows"></div>
+          <div class="row" style="margin-top:8px">
+            <button style="flex:1 1 100%" onclick="openAssigned()">⚡ Activate all assigned</button>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <button class="ghost" style="flex:1" onclick="autoAssignCurrent()">↻ Re-recommend</button>
+            <button class="ghost" style="flex:1" onclick="forgetRoles()">Forget roles</button>
+          </div>
+          <div id="roleHint" class="muted" style="margin-top:6px; font-size:11.5px"></div>
+        </div>
         <button class="big ghost" id="btnDualVid" onclick="dualVideoSetup()">📥 Import side + rear videos</button>
         <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Film the same run twice: one clip
           from the side and one from behind (or in front). The side clip is analysed for sagittal
           metrics, the rear clip for frontal metrics (pelvic drop, knee collapse, arm swing) — both in
           one session and one report.</div>
         <button class="big" id="btnLabRig" onclick="labRigSetup()">🎯 Lab rig — side + front + rear</button>
-        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">One click: the best colour
-          camera goes on the <b>side</b> (Azure Kinect 4K at 1920×1080 when it is plugged in,
-          otherwise the Femto Mega at 1280×720 — the side view carries most of the metrics), the
-          remaining one on the <b>front</b> (frontal plane), and a third camera on the <b>rear</b>
-          if one is present. Finds them by name, so it survives index changes after a replug.
-          With only two cameras it opens side + front.</div>
+        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">One click: re-applies the
+          recommended mapping over the role picker above (the best colour camera — Azure Kinect 4K
+          at 1920×1080 when plugged, otherwise the Femto Mega at 1280×720 — goes on the <b>side</b>,
+          the remaining one on the <b>front</b>, a third on the <b>rear</b>) and opens the whole rig.
+          Cameras are found by name, so it survives index changes after a replug. With only two
+          cameras it opens side + front.</div>
         <button class="big ghost" id="btnLabRigDepth" onclick="labRigDepth()">📐 Lab rig + depth — Femto side + RealSense depth front</button>
         <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Same rig, but the RealSense is
           opened through its SDK so colour and <b>depth</b> arrive pixel-aligned in one pipeline —
@@ -720,6 +742,8 @@ async function refreshCams() {
                                      && String(c.index) !== String($("usb2Index").value));
     if (free) $("usb3Index").value = free.index;
   }
+  scanCache = d.cameras || [];
+  renderRolePanel();
 }
 
 /* One-click rig: best sensor on the SIDE (it carries most of the metrics), the
@@ -746,6 +770,15 @@ async function labRigSetup() {
   const front = rest.find(c => /orbbec|femto/i.test(c.name || ""))
              || rest.find(c => /realsense/i.test(c.name || "")) || rest[0] || null;
   const rear = rgb.find(c => c !== side && c !== front) || null;
+  // the preset also seeds the role panel, so what is open is also what the
+  // camera rows show (and a later Start reuses the same mapping)
+  scanCache = d.cameras || [];
+  camRoles = {};
+  camRoles[side.name] = "side";
+  if (front) camRoles[front.name] = "front";
+  if (rear) camRoles[rear.name] = "rear";
+  saveCamRoles();
+  renderRolePanel();
   const sizeFor = c => /azure/i.test(c.name || "") ? {width: 1920, height: 1080}
                      : /realsense/i.test(c.name || "") ? {width: 640, height: 480}
                      : {width: 1280, height: 720};
@@ -816,6 +849,225 @@ async function labRigDepth() {
   setPlane2("frontal");
   banner("Lab rig open: " + out.source + " (side) + " + out.source2 + " (front, depth)", "ok");
   return true;
+}
+
+/* ------------------------------------------------------ camera roles ------ */
+/* Scan → recommend → activate. Roles live in localStorage keyed by camera
+   NAME, because DirectShow indices move on every replug. The recommendation is
+   recomputed on every scan, and an explicit choice always wins over it. Front
+   occupies view 2 and rear view 3, because only view 3 carries the front/rear
+   facing direction through the backend. */
+const ROLE_KEY = "runtrack.cameraRoles";
+const ROLE_LABEL = {side: "Side", front: "Front", rear: "Rear", off: "Off"};
+let camRoles = loadCamRoles();
+let scanCache = [];
+
+function loadCamRoles() {
+  try { return JSON.parse(localStorage.getItem(ROLE_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+function saveCamRoles() {
+  try { localStorage.setItem(ROLE_KEY, JSON.stringify(camRoles)); } catch (e) {}
+}
+/* a pin that carries no colour video can never be a pose camera */
+function isColourCam(c) {
+  if (c.non_video) return false;
+  return !/depth|infrared|\bir\b/i.test(c.name || "");
+}
+function sizeForCam(c) {
+  if (/azure/i.test(c.name || "")) return {width: 1920, height: 1080};
+  if (/realsense/i.test(c.name || "")) return {width: 640, height: 480};
+  return {width: 1280, height: 720};
+}
+/* Recommendation by name: the best colour sensor on the side (most metrics),
+   the next on the front, a third on the rear. */
+function recommendRoles(cams) {
+  const rgb = cams.filter(isColourCam);
+  const pick = re => rgb.find(c => re.test(c.name || ""));
+  const out = {};
+  const side = pick(/azure/i) || pick(/orbbec|femto/i) || pick(/realsense/i) || rgb[0] || null;
+  if (side) out[side.name] = "side";
+  const rest = rgb.filter(c => c !== side);
+  const front = rest.find(c => /orbbec|femto/i.test(c.name || ""))
+             || rest.find(c => /realsense/i.test(c.name || "")) || rest[0] || null;
+  if (front) out[front.name] = "front";
+  const rear = rgb.find(c => c !== side && c !== front) || null;
+  if (rear) out[rear.name] = "rear";
+  return out;
+}
+/* Explicit role first, then the recommendation for whatever is still free —
+   one role is never handed to two cameras. */
+function resolveAssignments(cams) {
+  const rgb = cams.filter(isColourCam);
+  const rec = recommendRoles(rgb);
+  const used = new Set(), out = {};
+  for (const c of rgb) {
+    const r = camRoles[c.name];
+    if (r && r !== "off" && !used.has(r)) { out[c.name] = r; used.add(r); }
+  }
+  for (const c of rgb) {
+    if (out[c.name] || camRoles[c.name] === "off") continue;
+    const r = rec[c.name];
+    if (r && !used.has(r)) { out[c.name] = r; used.add(r); }
+  }
+  for (const c of rgb) if (!out[c.name]) out[c.name] = "off";
+  return out;
+}
+/* Which camera becomes the primary (side) and which two fill views 2 and 3. */
+function planRig(cams) {
+  const assign = resolveAssignments(cams);
+  const rgb = cams.filter(isColourCam);
+  const byRole = r => rgb.find(c => assign[c.name] === r) || null;
+  const side = byRole("side"), front = byRole("front"), rear = byRole("rear");
+  let primary = side, primaryPlane = "sagittal";
+  if (!primary && (front || rear)) { primary = front || rear; primaryPlane = "frontal"; }
+  const second = front && front !== primary ? front : null;
+  const third = rear && rear !== primary && rear !== second ? rear : null;
+  return {assign, side, front, rear, primary, primaryPlane, second, third};
+}
+function setRole(index, role) {
+  const cam = scanCache.find(c => String(c.index) === String(index));
+  if (!cam) return;
+  if (role && role !== "off") {
+    for (const name of Object.keys(camRoles)) {
+      if (name !== cam.name && camRoles[name] === role) delete camRoles[name];
+    }
+    camRoles[cam.name] = role;
+  } else {
+    camRoles[cam.name] = "off";
+  }
+  saveCamRoles();
+  renderRolePanel();
+}
+function forgetRoles() {
+  camRoles = {}; saveCamRoles(); renderRolePanel();
+  banner("Camera roles cleared — the recommendation is used again.", "info");
+}
+function autoAssignCurrent() {
+  camRoles = {}; saveCamRoles(); renderRolePanel();
+  banner("Roles re-recommended from the connected cameras.", "info");
+}
+function renderRolePanel() {
+  const panel = $("rolePanel"), box = $("roleRows");
+  if (!panel || !box) return;
+  const rgb = (scanCache || []).filter(isColourCam);
+  panel.style.display = rgb.length ? "" : "none";
+  if (!rgb.length) return;
+  const plan = planRig(scanCache);
+  box.innerHTML = "";
+  for (const c of rgb) {
+    const role = plan.assign[c.name] || "off";
+    const row = document.createElement("div");
+    row.style.cssText = "margin:7px 0";
+    const nm = document.createElement("div");
+    nm.style.cssText = "font-size:12.5px; margin-bottom:3px";
+    const sz = sizeForCam(c);
+    nm.innerHTML = (c.name || ("Camera " + c.index)) +
+      " <span class='muted'>· index " + c.index + " · " + sz.width + "×" + sz.height + "</span>" +
+      (camRoles[c.name] ? "" : " <span class='muted'>· recommended</span>");
+    row.appendChild(nm);
+    const btns = document.createElement("div");
+    btns.style.cssText = "display:flex; gap:5px; flex-wrap:wrap";
+    for (const r of ["side", "front", "rear", "off"]) {
+      const b = document.createElement("button");
+      b.className = role === r ? "active" : "ghost";
+      b.style.cssText = "padding:2px 0; font-size:11.5px; flex:1 1 0; min-width:52px";
+      b.textContent = ROLE_LABEL[r];
+      b.onclick = () => setRole(c.index, r);
+      btns.appendChild(b);
+    }
+    row.appendChild(btns);
+    box.appendChild(row);
+  }
+  const names = [];
+  if (plan.primary) names.push((plan.side ? "side" : plan.primaryPlane) + " = " + plan.primary.name);
+  if (plan.second) names.push("front = " + plan.second.name);
+  if (plan.third) names.push("rear = " + plan.third.name);
+  const hint = $("roleHint");
+  if (hint) hint.textContent = names.length
+    ? "Next activation: " + names.join(" · ") + " (max 3 views — extra cameras stay Off)."
+    : "Every camera is Off — turn at least one on, or press Re-recommend.";
+}
+
+/* Scan: list what is connected and report the recommended mapping. */
+async function scanAndAssign() {
+  banner("Scanning cameras…", "info");
+  await refreshCams();
+  const rgb = (scanCache || []).filter(isColourCam);
+  if (!rgb.length) {
+    banner("No colour camera found — check the USB cable/port and press Scan again. "
+           + "Depth and IR pins are never used.", "err");
+    return false;
+  }
+  const plan = planRig(scanCache);
+  const parts = [];
+  if (plan.primary) parts.push((plan.side ? "side" : plan.primaryPlane) + ": " + plan.primary.name);
+  if (plan.second) parts.push("front: " + plan.second.name);
+  if (plan.third) parts.push("rear: " + plan.third.name);
+  banner("Found " + rgb.length + " colour camera" + (rgb.length > 1 ? "s" : "") + " — "
+         + parts.join(" · ") + ". Change a role below if the room is wired differently.", "ok");
+  return true;
+}
+
+/* Open the whole assigned rig in one call (primary + view 2 + view 3). */
+async function openAssigned() {
+  banner("");
+  const d = await (await fetch("/api/cameras")).json();
+  scanCache = d.cameras || [];
+  renderRolePanel();
+  const plan = planRig(scanCache);
+  if (!plan.primary) {
+    banner("No colour camera to activate — plug one in and press Scan.", "err");
+    return false;
+  }
+  const sz = sizeForCam(plan.primary);
+  const payload = {kind: "usb", index: plan.primary.index, width: sz.width, height: sz.height,
+                   seg: !!($("segPrimary") && $("segPrimary").checked)};
+  if (plan.second) {
+    const f = sizeForCam(plan.second);
+    payload.source2 = {kind: "usb", index: plan.second.index, width: f.width, height: f.height,
+                       seg: !!($("segSecond") && $("segSecond").checked)};
+    payload.plane2 = "frontal";
+  }
+  if (plan.third) {
+    const r = sizeForCam(plan.third);
+    payload.source3 = {kind: "usb", index: plan.third.index, width: r.width, height: r.height,
+                       seg: !!($("seg3") && $("seg3").checked)};
+    payload.plane3 = "frontal";
+    payload.direction3 = "rear";
+  }
+  const out = await jpost("/api/camera/open", payload);
+  if (!out.ok) { banner("Activation failed: " + out.error, "err"); return false; }
+  // mirror the open rig into the form so a later Open / Start reuses it
+  $("camKind").value = "usb"; kindChanged();
+  setPlane(plan.primaryPlane);
+  $("usbIndex").value = plan.primary.index;
+  $("useCam2").checked = !!plan.second;
+  $("cam2Box").style.display = plan.second ? "" : "none";
+  if (plan.second) {
+    $("cam2Kind").value = "usb"; kind2Changed();
+    $("usb2Index").value = plan.second.index; setPlane2("frontal");
+  }
+  $("useCam3").checked = !!plan.third;
+  $("cam3Box").style.display = plan.third ? "" : "none";
+  if (plan.third) {
+    $("cam3Kind").value = "usb"; kind3Changed();
+    $("usb3Index").value = plan.third.index; setPlane3("frontal"); setDirection3("rear");
+  }
+  feedActive = true;
+  $("feed").src = "/video_feed?ts=" + Date.now();
+  const parts = [out.source + " (" + plan.primaryPlane + ")"];
+  if (out.source2 && out.source2 !== "none") parts.push(out.source2 + " (front)");
+  if (out.source3 && out.source3 !== "none") parts.push(out.source3 + " (rear)");
+  banner("Activated: " + parts.join(" + "), "ok");
+  return true;
+}
+
+/* True when the open rig already matches the assignment, so Start does not
+   re-open (and briefly blank) a rig that is already correct. */
+function rigMatches(plan) {
+  if (!lastState || !lastState.active || !plan || !plan.primary) return false;
+  if (String(lastState.source || "") !== "USB camera " + plan.primary.index) return false;
+  return !!lastState.has_camera2 === !!plan.second && !!lastState.has_camera3 === !!plan.third;
 }
 
 function setDiscipline(p) {
@@ -1020,10 +1272,22 @@ async function startSession() {
     banner("Name and phone are required.", "err");
     return;
   }
-  // a session needs a live camera — open the selected source automatically
-  if (!(lastState && lastState.active)) {
-    banner("No camera open — opening the selected source…", "info");
-    if (await openCamera()) {
+  // A session needs a live camera. When the source is USB, activate EVERY
+  // assigned camera in one call — so a forgotten second/third view cannot be
+  // silently missing from the recording. File/URL sources keep the old flow.
+  const wantRig = $("camKind").value === "usb";
+  let plan = null;
+  if (wantRig) {
+    const scan = await (await fetch("/api/cameras")).json();
+    scanCache = scan.cameras || [];
+    renderRolePanel();
+    plan = planRig(scanCache);
+  }
+  if (!(lastState && lastState.active) || (wantRig && !rigMatches(plan))) {
+    banner(wantRig ? "Activating every assigned camera…"
+                   : "No camera open — opening the selected source…", "info");
+    const opened = wantRig ? await openAssigned() : await openCamera();
+    if (opened) {
       for (let i = 0; i < 12; i++) {            // up to ~6 s: DirectShow opens can be slow
         await new Promise(r => setTimeout(r, 500));
         try { if ((await (await fetch("/api/state")).json()).active) break; } catch (e) {}
@@ -1032,10 +1296,12 @@ async function startSession() {
     let st = null;
     try { st = await (await fetch("/api/state")).json(); } catch (e) {}
     if (!st || !st.active) {
-      $("startErr").textContent = "Could not start: no camera is open. Use the Camera card (Scan → Open camera).";
+      $("startErr").textContent = "Could not start: no camera is open. Use the Camera card " +
+        "(Scan cameras & assign roles → Activate all assigned).";
       banner("Could not start: no camera is open.", "err");
       return;
     }
+    lastState = st;
   }
   const d = await jpost("/api/session/start", {
     name, phone, view_plane: planePlanned,

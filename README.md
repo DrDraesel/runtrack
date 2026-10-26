@@ -16,10 +16,12 @@ Then double-click **Start Run Lab.cmd**, or:
 
 then open http://127.0.0.1:8780/ (opens automatically). Keep the window open.
 
-Flow: **Scan** → pick camera → **Open camera** → pick the **camera view**
-(sagittal / frontal) → fill patient **name + phone** (required) → **Start run
-session** (default 60 s) → the report builds automatically when the run ends.
-Live joint angles appear on the skeleton while running.
+Flow: **Scan cameras & assign roles** → check the recommended **Side / Front /
+Rear** per camera (the picker is remembered per camera name) → fill patient
+**name + phone** (required) → **Start run session** (default 60 s). Start opens
+**every assigned camera in one call**, so the second and third views cannot be
+silently missing. The report builds automatically when the run ends. Live joint
+angles appear on the skeleton while running.
 
 ## Camera sources
 
