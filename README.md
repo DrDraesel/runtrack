@@ -217,10 +217,12 @@ signs. See `docs/CLINICAL-RATIONALE.md` for the workflow and checklist.
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-363 tests: metrics + biomechanics math (including non-square aspect correction),
+520 tests: metrics + biomechanics math (including non-square aspect correction),
 1-Euro filter, synthetic gait-cycle ground-truth latching, cycling/TT live-fit
 and overlay, advisor scoring/compare, storage, real-video pipeline, second-view
-(rear + side) analysis and report, report/API endpoints.
+(rear + side) and third-view (front) analysis and report, report/API endpoints,
+clinical rationale + AI guardrails, camera-pin guards, live monitor, stereo
+calibration + fusion, and the pluggable pose backend (MediaPipe + RTMPose).
 
 ## Use it on another computer (camera / phone camera connected there)
 
