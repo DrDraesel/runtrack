@@ -19,6 +19,7 @@ import clinical
 import config
 import cycling as CY
 import gait_events as GA
+import joint_study as JS
 import metrics as M
 from session_store import Store
 
@@ -269,6 +270,118 @@ def _dval(v):
     return v
 
 
+CAPTURE_ROWS_MAX = 40      # printed capture rows; joint_study.MAX_CAPTURES is the same cap
+
+
+def _num(v):
+    """float or None — tolerant of JSON strings/None/bools, never NaN/inf."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        out = float(v)
+    except (TypeError, ValueError):
+        return None
+    return out if np.isfinite(out) else None
+
+
+def _deg1(v):
+    """Degrees to one decimal; an em dash when that joint was not measured."""
+    out = _num(v)
+    return "—" if out is None else f"{out:.1f}°"
+
+
+def _captures_section(summary) -> str:
+    """'Captured angles (N)' — one row per operator capture, '' when there is none.
+
+    Values are the included angle stored on the frame that was captured; a joint
+    missing from a record stays a dash instead of being interpolated.
+    """
+    e = html.escape
+    caps = summary.get("angle_captures") if isinstance(summary, dict) else None
+    if not isinstance(caps, list):
+        return ""
+    records = [c for c in caps if isinstance(c, dict)]
+    if not records:
+        return ""
+    # One column per joint measured in ANY capture, ordered by joint_study.JOINTS.
+    seen = set()
+    for rec in records:
+        angles = rec.get("angles")
+        if isinstance(angles, dict):
+            seen.update(j for j, v in angles.items() if _num(v) is not None)
+    if not seen:
+        return ""
+    cols = [j for j in JS.JOINTS if j in seen]
+    cols += sorted(j for j in seen if j not in JS.LABELS)   # never hide a measured key
+    head = ('<th>Time (s)</th><th>Label</th>'
+            + "".join(f"<th>{e(JS.LABELS.get(j) or j.replace('_', ' '))}</th>" for j in cols))
+    rows = []
+    for rec in records[:CAPTURE_ROWS_MAX]:
+        angles = rec.get("angles")
+        if not isinstance(angles, dict):
+            angles = {}
+        t = _num(rec.get("t"))
+        time_txt = "—" if t is None else f"{t:.1f}"
+        rows.append(
+            f"<tr><td>{time_txt}</td><td>{e(str(rec.get('label') or '—'))}</td>"
+            + "".join(f"<td>{_deg1(angles.get(j))}</td>" for j in cols)
+            + "</tr>")
+    trimmed = (""
+               if len(records) <= CAPTURE_ROWS_MAX else
+               f'<p class="muted" style="font-size:12px">Showing the first {CAPTURE_ROWS_MAX} '
+               f'of {len(records)} captures.</p>')
+    return (f'<h2>Captured angles ({len(records)})</h2>'
+            '<p class="muted" style="font-size:12px;max-width:880px">Operator captures: the '
+            'included joint angle (180° means the segment is straight) on the frame that was '
+            'captured, exactly as measured — nothing is interpolated. A dash means the pose '
+            'model did not see that joint on that frame.</p>'
+            f'{trimmed}<table><tr>{head}</tr>{"".join(rows)}</table>')
+
+
+def _joint_study_section(summary) -> str:
+    """'Joint study — per-joint summary' grouped by joint_study.GROUPS, or ''."""
+    e = html.escape
+    study = summary.get("joint_study") if isinstance(summary, dict) else None
+    if not isinstance(study, dict):
+        return ""
+
+    def _has(rec):
+        return any(_num(rec.get(k)) is not None for k in ("mean", "min", "max", "rom", "n"))
+
+    have = {j: rec for j, rec in study.items() if isinstance(rec, dict) and _has(rec)}
+    if not have:
+        return ""
+    known = [j for _title, keys in JS.GROUPS for j in keys]
+    groups = [(title, [j for j in keys if j in have]) for title, keys in JS.GROUPS]
+    leftovers = sorted(j for j in have if j not in known)
+    if leftovers:                       # a joint added later must not vanish silently
+        groups.append(("Other", leftovers))
+    body = []
+    for title, keys in groups:
+        if not keys:
+            continue
+        body.append(f'<tr><td colspan="6" style="padding-top:10px;border-bottom:0">'
+                    f'<b>{e(title)}</b></td></tr>')
+        for joint in keys:
+            rec = have[joint]
+            n = _num(rec.get("n"))
+            body.append(
+                f"<tr><td>{e(JS.LABELS.get(joint) or joint.replace('_', ' '))}</td>"
+                f"<td>{_deg1(rec.get('mean'))}</td><td>{_deg1(rec.get('min'))}</td>"
+                f"<td>{_deg1(rec.get('max'))}</td><td>{_deg1(rec.get('rom'))}</td>"
+                f"<td>{'—' if n is None else str(int(n))}</td></tr>")
+    return ('<h2>Joint study — per-joint summary</h2>'
+            '<p class="muted" style="font-size:12px;max-width:880px">Included joint angle: '
+            '180° means the segment is straight. Mean is the average over the tracked frames, '
+            'min/max are the lowest/highest tracked value and ROM is max − min over those same '
+            'frames. These are <b>not</b> peak flexion, not a clinical ROM measurement and not '
+            'clinical norms. <b>n frames</b> is how many frames actually contributed — it '
+            'differs per joint, and a low n (poor tracking coverage) means the value rests on '
+            'few frames, so do not interpret that joint.</p>'
+            '<table><tr><th>Joint</th><th>Mean</th><th>Min</th><th>Max</th><th>ROM</th>'
+            f'<th>n frames</th></tr>{"".join(body)}</table>')
+
+
 def _badge(verdict: str) -> str:
     cls = {"Improved": "ok", "Regressed": "bad", "Neutral": "warn"}.get(verdict, "muted")
     return f'<span class="badge {cls}">{html.escape(str(verdict))}</span>'
@@ -451,6 +564,24 @@ def build(sid: int, store: Store) -> str:
     asym_rows = "".join(
         f"<tr><td>{esc(k.replace('_', ' '))}</td><td>{_fmt(v, '%') if not isinstance(v, str) else esc(v)}</td></tr>"
         for k, v in asym.items() if k != "formula")
+
+    # ---- captured angles + per-session joint study (optional summary blocks:
+    # older sessions and the CLI path do not write them, so both may be absent)
+    captures_section = _captures_section(summary)
+    joint_study_section = _joint_study_section(summary)
+    if captures_section and joint_study_section:
+        joint_ref_what = "Captured angles and the joint study further down"
+    elif captures_section:
+        joint_ref_what = "Captured angles further down"
+    elif joint_study_section:
+        joint_ref_what = "The joint study further down"
+    else:
+        joint_ref_what = ""
+    joint_ref = ("" if not joint_ref_what else
+                 f'<p class="muted" style="font-size:12px;max-width:880px">{joint_ref_what} '
+                 "reuse these same included angles: the operator's labelled captures and the "
+                 "per-joint mean/min/max over every tracked frame. Neither replaces peak "
+                 "flexion or a clinical ROM measurement.</p>")
 
     # ---- form metrics vs bands
     form_rows = ""
@@ -1093,6 +1224,11 @@ flexion/extension or a clinical ROM measurement. A low <b>Tracked</b> percentage
 landmark was rarely visible; do not interpret that joint.</p>
 <table><tr><th>Joint</th><th>Mean</th><th>Min</th><th>Max</th><th>ROM</th><th>Angular vel.</th><th>Tracked</th></tr>
 {joint_rows or '<tr><td colspan="7">No joint data was tracked.</td></tr>'}</table>
+{joint_ref}
+
+{captures_section}
+
+{joint_study_section}
 
 <h2>Left / right symmetry (mean angle agreement) and asymmetry index</h2>
 <table><tr><th>Joint</th><th>Symmetry</th></tr>{sym_rows or '<tr><td colspan="2">—</td></tr>'}</table>

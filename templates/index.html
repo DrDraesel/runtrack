@@ -85,6 +85,11 @@
               grid-template-columns: 350px minmax(520px, 1fr) 400px;
               grid-template-areas: "left mid right"; }
   .colleft { grid-area:left; } .colmid { grid-area:mid; } .colright { grid-area:right; }
+  /* the two interactive panels must be reachable without scrolling during a
+     live run: cameras decide the rig, joint capture is tapped mid-stride */
+  .colleft, .colright { display:flex; flex-direction:column; }
+  #cameraCard { order:-1; }
+  #jointStudyCard { order:-1; }
   @media (max-width: 1750px) {
     .livegrid { grid-template-columns: 350px 1fr;
                 grid-template-areas: "left mid" "right right"; }
@@ -106,6 +111,26 @@
   .chart .ct { font-size:11.5px; color:#9aa7b4; display:flex; justify-content:space-between; gap:8px; }
   .chart canvas { width:100%; height:120px; display:block; background:#0e141a;
                   border:1px solid #232c36; border-radius:8px; }
+
+  /* camera panel: one row per physical camera */
+  .camrow { display:flex; align-items:center; gap:7px; margin:5px 0; }
+  .camdot { width:9px; height:9px; border-radius:50%; background:#3b4652; flex:0 0 auto; }
+  .camdot.ok { background:#4ade80; }
+  .camdot.warn { background:#fbbf24; }
+  .camrow .nm { flex:1 1 auto; min-width:0; font-size:12px; overflow:hidden;
+                text-overflow:ellipsis; white-space:nowrap; }
+  .camrow select { flex:0 0 74px; width:74px; padding:3px 5px; font-size:12px; }
+  .camfps { flex:0 0 46px; text-align:right; font-size:11.5px; color:#8a97a5; }
+  details.adv { margin-top:12px; border-top:1px solid #232c36; padding-top:8px; }
+  details.adv summary { cursor:pointer; font-size:11.5px; color:#9aa7b4; }
+
+  /* joint studies */
+  .chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
+  .chip { background:#1a2129; border:1px solid #2a3441; color:#9aa7b4; border-radius:14px;
+          padding:4px 9px; font-size:10.5px; letter-spacing:.04em; }
+  .chip.on { background:#0e7490; border-color:#22d3ee; color:#e8edf2; }
+  #capList { margin:6px 0 0; padding-left:16px; font-size:11.5px; color:#c8d3de; }
+  #capList li { margin:2px 0; }
   .datagrid { max-width:1500px; }
   #startErr { color:#fca5a5; font-size:12.5px; margin-top:6px; }
 
@@ -220,165 +245,159 @@
           min {{ voice_cooldown }} s between cues.</div>
       </div>
 
-      <div class="card">
+      <div class="card" id="cameraCard">
         <h2>Camera</h2>
-        <button class="big" id="btnScanAssign" onclick="scanAndAssign()">🔍 Scan cameras &amp; assign roles</button>
-        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Finds every connected colour
-          camera and recommends a role: the best sensor on the <b>side</b> (it carries most of the
-          metrics), the next on the <b>front</b>, a third on the <b>rear</b>. Override any row below —
-          the choice is remembered per camera <b>name</b>, so it survives replugs and index shifts.
-          <b>▶ Start</b> activates every assigned camera, so you never record a session with one view
-          silently missing.</div>
-        <div id="rolePanel" style="display:none; margin-bottom:12px; border:1px solid #2a3441;
-             border-radius:8px; padding:9px 10px">
-          <div class="muted" style="font-size:11.5px; margin-bottom:2px">Camera location — tell the app
-            where each camera is: Side (sagittal, most metrics) · Front (frontal) · Rear (frontal, feet)
-            · Off.</div>
-          <div id="roleRows"></div>
-          <div class="row" style="margin-top:8px">
-            <button style="flex:1 1 100%" onclick="openAssigned()">⚡ Activate all assigned</button>
+        <button class="big" id="btnScanAssign" onclick="scanAndAssign()">🔍 Scan cameras</button>
+        <div class="muted" style="margin-top:6px; font-size:11.5px">Scan first, pick where each
+          camera stands, then ⚡ Open rig — Start opens the same rig by itself.</div>
+        <div id="rolePanel" style="margin-top:10px">
+          <!-- roleRows is the role-picker region; cameraRows holds one row per camera -->
+          <div id="roleRows">
+            <div id="cameraRows"></div>
           </div>
-          <div class="row" style="margin-top:6px">
-            <button class="ghost" style="flex:1" onclick="autoAssignCurrent()">↻ Re-recommend</button>
-            <button class="ghost" style="flex:1" onclick="forgetRoles()">Forget roles</button>
+          <div class="muted" id="pinsHidden" style="font-size:11px; margin-top:2px"></div>
+          <div class="row" style="margin-top:10px">
+            <button class="big" id="btnOpenRig" onclick="openAssigned()"
+                    title="⚡ Activate all assigned cameras in one call">⚡ Open rig</button>
           </div>
-          <div id="roleHint" class="muted" style="margin-top:6px; font-size:11.5px"></div>
-        </div>
-        <button class="big ghost" id="btnDualVid" onclick="dualVideoSetup()">📥 Import side + rear videos</button>
-        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Film the same run twice: one clip
-          from the side and one from behind (or in front). The side clip is analysed for sagittal
-          metrics, the rear clip for frontal metrics (pelvic drop, knee collapse, arm swing) — both in
-          one session and one report.</div>
-        <button class="big" id="btnLabRig" onclick="labRigSetup()">🎯 Lab rig — side + front + rear</button>
-        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">One click: re-applies the
-          recommended mapping over the role picker above (the best colour camera — Azure Kinect 4K
-          at 1920×1080 when plugged, otherwise the Femto Mega at 1280×720 — goes on the <b>side</b>,
-          the remaining one on the <b>front</b>, a third on the <b>rear</b>) and opens the whole rig.
-          Cameras are found by name, so it survives index changes after a replug. With only two
-          cameras it opens side + front.</div>
-        <button class="big ghost" id="btnLabRigDepth" onclick="labRigDepth()">📐 Lab rig + depth — Femto side + RealSense depth front</button>
-        <div class="muted" style="margin:6px 0 10px; font-size:11.5px">Same rig, but the RealSense is
-          opened through its SDK so colour and <b>depth</b> arrive pixel-aligned in one pipeline —
-          that is what turns landmark pixels into metres (step width, foot progression, 3D angles).
-          Runs at 640×480 on this unit even over the USB 2.1 link (~20 fps measured); 848×480 and
-          above need USB 3. If the SDK cannot start the pipeline the open fails rather than
-          silently substituting the colour-only UVC pin.</div>
-        <label>Source type</label>
-        <select id="camKind" onchange="kindChanged()">
-          <option value="usb">USB camera (built-in / external)</option>
-          <option value="url">Phone camera stream (URL)</option>
-          <option value="file">Video file (MP4 / MOV / WebM)</option>
-          <option value="depth">RealSense depth (aligned colour + depth)</option>
-        </select>
-        <div id="usbBox">
-          <label>Camera</label>
           <div class="row">
-            <select id="usbIndex"></select>
-            <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
+            <button class="big ghost" id="btnCloseCams" onclick="closeCamera()">■ Close cameras</button>
           </div>
+          <div class="muted" id="rigStatus" style="margin-top:8px; font-size:11.5px">No camera open.</div>
+          <div class="muted" id="roleHint" style="font-size:11px"></div>
         </div>
-        <div id="urlBox" style="display:none">
-          <label>Stream URL (phone IP-camera)</label>
-          <input id="urlInput" placeholder="http://192.168.1.50:8080/video">
-          <div class="muted" style="margin-top:6px">Android: “IP Webcam” app → Start server → use its
-            http://IP:8080/video address. Phone and PC on the same Wi-Fi.</div>
-        </div>
-        <div id="fileBox" style="display:none">
-          <label>Video file (MP4 / MOV / WebM)</label>
-          <input id="fileInput" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
-          <div class="muted" style="margin-top:6px">Uploads locally, then plays through the tracker
-            with slow-motion + scrubbing. Analysis CLI also available: tools/analyze_video.py</div>
-        </div>
-        <div class="muted" style="margin:10px 0 4px; font-size:12px">— accuracy options —</div>
-        <label style="display:flex; gap:8px; align-items:center">
-          <input type="checkbox" id="useCam2" style="width:auto"> <span>Second view (rear / side) —
-          second camera or video, same session</span></label>
-        <div id="cam2Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
-          <label>Second view source</label>
-          <select id="cam2Kind" onchange="kind2Changed()">
-            <option value="usb">USB camera (external)</option>
+
+        <details class="adv" id="advSources">
+          <summary>Advanced — file / phone / depth sources</summary>
+          <div class="playrow" style="margin-top:8px">
+            <button class="ghost" onclick="autoAssignCurrent()">↻ Re-recommend roles</button>
+            <button class="ghost" onclick="forgetRoles()">Forget roles</button>
+          </div>
+          <button class="big ghost" id="btnDualVid" onclick="dualVideoSetup()" style="margin-top:8px">📥 Import side + rear videos</button>
+          <div class="muted" style="margin-top:4px; font-size:11.5px">One side clip + one rear/front
+            clip, analysed in the same session and report.</div>
+          <button class="big" id="btnLabRig" onclick="labRigSetup()">🎯 Lab rig — side + front + rear</button>
+          <div class="muted" style="margin-top:4px; font-size:11.5px">Finds the colour cameras by name
+            and opens side + front (+ rear when present).</div>
+          <button class="big ghost" id="btnLabRigDepth" onclick="labRigDepth()">📐 Lab rig + depth — Femto side + RealSense depth front</button>
+          <div class="muted" style="margin-top:4px; font-size:11.5px">RealSense front through its SDK:
+            colour + depth aligned (640×480 over USB 2.1).</div>
+          <label>Source type</label>
+          <select id="camKind" onchange="kindChanged()">
+            <option value="usb">USB camera (built-in / external)</option>
             <option value="url">Phone camera stream (URL)</option>
-            <option value="file">Video file</option>
+            <option value="file">Video file (MP4 / MOV / WebM)</option>
             <option value="depth">RealSense depth (aligned colour + depth)</option>
           </select>
-          <label>Second view plane * (which metrics it assesses)</label>
-          <div class="planeRow">
-            <button class="ghost" id="btn2Fro" onclick="setPlane2('frontal')">Rear / front (frontal)</button>
-            <button class="ghost" id="btn2Sag" onclick="setPlane2('sagittal')">Side (sagittal)</button>
-          </div>
-          <div id="usb2Box">
+          <div id="usbBox">
             <label>Camera</label>
             <div class="row">
-              <select id="usb2Index"></select>
+              <select id="usbIndex"></select>
               <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
             </div>
           </div>
-          <div id="url2Box" style="display:none">
-            <label>Stream URL (second phone)</label>
-            <input id="url2Input" placeholder="http://192.168.1.51:8080/video">
+          <div id="urlBox" style="display:none">
+            <label>Stream URL (phone IP-camera)</label>
+            <input id="urlInput" placeholder="http://192.168.1.50:8080/video">
+            <div class="muted" style="margin-top:4px; font-size:11.5px">Android “IP Webcam” app →
+              Start server → use its http://IP:8080/video address on the same Wi-Fi.</div>
           </div>
-          <div id="file2Box" style="display:none">
-            <label>Video file (rear / second-view clip)</label>
-            <input id="file2Input" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
+          <div id="fileBox" style="display:none">
+            <label>Video file (MP4 / MOV / WebM)</label>
+            <input id="fileInput" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
+            <div class="muted" style="margin-top:4px; font-size:11.5px">Uploads locally, then plays
+              with slow-motion + scrubbing. CLI: tools/analyze_video.py</div>
           </div>
-        </div>
-        <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
-          <input type="checkbox" id="useCam3" style="width:auto"> <span>Third view (third camera) —
-          simultaneous third feed, usually the low rear view for feet</span></label>
-        <div id="cam3Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
-          <label>Third view source</label>
-          <select id="cam3Kind" onchange="kind3Changed()">
-            <option value="usb">USB camera (external)</option>
-            <option value="url">Phone camera stream (URL)</option>
-            <option value="file">Video file</option>
-            <option value="depth">RealSense depth (aligned colour + depth)</option>
-          </select>
-          <label>Third view camera facing (front / rear of the runner)</label>
-          <div class="planeRow">
-            <button class="ghost" id="btn3Front" onclick="setDirection3('front')">Front (camera faces the runner)</button>
-            <button class="ghost" id="btn3Rear" onclick="setDirection3('rear')">Rear (camera follows the runner)</button>
+          <div class="row" style="margin-top:10px">
+            <button onclick="openCamera()">Open camera(s)</button>
+            <button class="ghost" onclick="closeCamera()">Close</button>
           </div>
-          <label>Third view plane * (which metrics it assesses)</label>
-          <div class="planeRow">
-            <button class="ghost" id="btn3Fro" onclick="setPlane3('frontal')">Front / rear (frontal)</button>
-            <button class="ghost" id="btn3Sag" onclick="setPlane3('sagittal')">Side (sagittal)</button>
-          </div>
-          <div id="usb3Box">
-            <label>Camera</label>
-            <div class="row">
-              <select id="usb3Index"></select>
-              <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
+          <div class="muted" style="margin:10px 0 4px; font-size:12px">— accuracy options —</div>
+          <label style="display:flex; gap:8px; align-items:center">
+            <input type="checkbox" id="useCam2" style="width:auto"> <span>Second view (rear / side) —
+            second camera or video, same session</span></label>
+          <div id="cam2Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
+            <label>Second view source</label>
+            <select id="cam2Kind" onchange="kind2Changed()">
+              <option value="usb">USB camera (external)</option>
+              <option value="url">Phone camera stream (URL)</option>
+              <option value="file">Video file</option>
+              <option value="depth">RealSense depth (aligned colour + depth)</option>
+            </select>
+            <label>Second view plane * (which metrics it assesses)</label>
+            <div class="planeRow">
+              <button class="ghost" id="btn2Fro" onclick="setPlane2('frontal')">Rear / front (frontal)</button>
+              <button class="ghost" id="btn2Sag" onclick="setPlane2('sagittal')">Side (sagittal)</button>
+            </div>
+            <div id="usb2Box">
+              <label>Camera</label>
+              <div class="row">
+                <select id="usb2Index"></select>
+                <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
+              </div>
+            </div>
+            <div id="url2Box" style="display:none">
+              <label>Stream URL (second phone)</label>
+              <input id="url2Input" placeholder="http://192.168.1.51:8080/video">
+            </div>
+            <div id="file2Box" style="display:none">
+              <label>Video file (rear / second-view clip)</label>
+              <input id="file2Input" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
             </div>
           </div>
-          <div id="url3Box" style="display:none">
-            <label>Stream URL (third phone / front camera)</label>
-            <input id="url3Input" placeholder="http://192.168.1.52:8080/video">
+          <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
+            <input type="checkbox" id="useCam3" style="width:auto"> <span>Third view (third camera) —
+            simultaneous third feed, usually the low rear view for feet</span></label>
+          <div id="cam3Box" style="display:none; border-left:2px solid #2a3441; padding-left:10px; margin-top:6px">
+            <label>Third view source</label>
+            <select id="cam3Kind" onchange="kind3Changed()">
+              <option value="usb">USB camera (external)</option>
+              <option value="url">Phone camera stream (URL)</option>
+              <option value="file">Video file</option>
+              <option value="depth">RealSense depth (aligned colour + depth)</option>
+            </select>
+            <label>Third view camera facing (front / rear of the runner)</label>
+            <div class="planeRow">
+              <button class="ghost" id="btn3Front" onclick="setDirection3('front')">Front (camera faces the runner)</button>
+              <button class="ghost" id="btn3Rear" onclick="setDirection3('rear')">Rear (camera follows the runner)</button>
+            </div>
+            <label>Third view plane * (which metrics it assesses)</label>
+            <div class="planeRow">
+              <button class="ghost" id="btn3Fro" onclick="setPlane3('frontal')">Front / rear (frontal)</button>
+              <button class="ghost" id="btn3Sag" onclick="setPlane3('sagittal')">Side (sagittal)</button>
+            </div>
+            <div id="usb3Box">
+              <label>Camera</label>
+              <div class="row">
+                <select id="usb3Index"></select>
+                <button class="ghost" style="flex:0 0 auto" onclick="refreshCams()">Scan</button>
+              </div>
+            </div>
+            <div id="url3Box" style="display:none">
+              <label>Stream URL (third phone / front camera)</label>
+              <input id="url3Input" placeholder="http://192.168.1.52:8080/video">
+            </div>
+            <div id="file3Box" style="display:none">
+              <label>Video file (front-view clip)</label>
+              <input id="file3Input" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
+            </div>
           </div>
-          <div id="file3Box" style="display:none">
-            <label>Video file (front-view clip)</label>
-            <input id="file3Input" type="file" accept="video/mp4,video/quicktime,video/webm,video/*">
+          <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
+            <input type="checkbox" id="segPrimary" style="width:auto"> <span>Estimate frontal area
+            (aero) from the primary camera silhouette</span></label>
+          <label style="display:flex; gap:8px; align-items:center">
+            <input type="checkbox" id="segSecond" style="width:auto"> <span>…and from the second camera
+            (rear/side aero camera)</span></label>
+          <label style="display:flex; gap:8px; align-items:center">
+            <input type="checkbox" id="seg3" style="width:auto"> <span>…and from the third camera
+            (front-view aero camera)</span></label>
+          <div id="rigCard" style="display:none; margin-top:14px; border-top:1px solid #2a3441; padding-top:10px">
+            <label style="margin-top:0">Placement check (live)</label>
+            <div class="muted" style="font-size:11.5px">Framing, coverage and pitch per view. A pass
+              means the view is usable — never that a joint angle is clinically valid.</div>
+            <div id="rigBody" style="margin-top:6px; font-size:12px; line-height:1.5"></div>
           </div>
-        </div>
-        <label style="display:flex; gap:8px; align-items:center; margin-top:10px">
-          <input type="checkbox" id="segPrimary" style="width:auto"> <span>Estimate frontal area
-          (aero) from the primary camera silhouette</span></label>
-        <label style="display:flex; gap:8px; align-items:center">
-          <input type="checkbox" id="segSecond" style="width:auto"> <span>…and from the second camera
-          (rear/side aero camera)</span></label>
-        <label style="display:flex; gap:8px; align-items:center">
-          <input type="checkbox" id="seg3" style="width:auto"> <span>…and from the third camera
-          (front-view aero camera)</span></label>
-        <div class="row" style="margin-top:12px">
-          <button onclick="openCamera()">Open camera(s)</button>
-          <button class="ghost" onclick="closeCamera()">Close</button>
-        </div>
-        <div id="rigCard" style="display:none; margin-top:14px; border-top:1px solid #2a3441; padding-top:10px">
-          <label style="margin-top:0">Placement check (live)</label>
-          <div class="muted" style="font-size:11.5px">Framing, body coverage, camera pitch and
-            resolution per view. Move the camera until every view reads OK. A pass means the view is
-            usable — it never makes a joint angle clinically valid.</div>
-          <div id="rigBody" style="margin-top:6px; font-size:12px; line-height:1.5"></div>
-        </div>
+        </details>
       </div>
     </div>
 
@@ -487,6 +506,33 @@
         </div>
         <div class="muted">Rolling 90 s window; shaded area = reference band (heuristic,
           not clinical norms). Samples arrive with the live poll (~1/s).</div>
+      </div>
+
+      <div class="card" id="jointStudyCard">
+        <h2>Joint studies</h2>
+        <div class="chips" id="jointChips">
+          <button class="chip on" data-joint="left_knee" onclick="toggleJoint('left_knee')">LEFT KNEE</button>
+          <button class="chip on" data-joint="right_knee" onclick="toggleJoint('right_knee')">RIGHT KNEE</button>
+          <button class="chip" data-joint="left_hip" onclick="toggleJoint('left_hip')">LEFT HIP</button>
+          <button class="chip" data-joint="right_hip" onclick="toggleJoint('right_hip')">RIGHT HIP</button>
+          <button class="chip" data-joint="left_ankle" onclick="toggleJoint('left_ankle')">LEFT ANKLE</button>
+          <button class="chip" data-joint="right_ankle" onclick="toggleJoint('right_ankle')">RIGHT ANKLE</button>
+          <button class="chip on" data-joint="trunk_lean" onclick="toggleJoint('trunk_lean')">TRUNK</button>
+        </div>
+        <div class="metrics" id="jointGrid"></div>
+        <div class="chart">
+          <div class="ct"><span>Selected joints</span><span class="muted">degrees · 90 s</span></div>
+          <canvas id="ch_joints"></canvas>
+        </div>
+        <div class="playrow" style="margin-top:8px">
+          <input id="capLabel" placeholder="Label (optional) — e.g. fatigue, mid-stance" maxlength="60"
+                 style="flex:1">
+          <button id="btnCapture" class="ghost" onclick="captureAngles()" disabled>📌 Capture angles</button>
+        </div>
+        <div class="muted" id="capNote" style="margin-top:4px; font-size:11.5px">Included angle
+          (180° = straight), captured with the session time and label.</div>
+        <div class="muted" id="capCount" style="margin-top:4px; font-size:11.5px">not recording</div>
+        <ol id="capList"></ol>
       </div>
 
       <div class="card">
@@ -817,7 +863,7 @@ async function labRigSetup() {
   const parts = [out.source + " (side, " + sid.width + "×" + sid.height + ")"];
   if (out.source2) parts.push(out.source2 + " (front)");
   if (out.source3) parts.push(out.source3 + " (rear)");
-  banner("Lab rig open: " + parts.join(" + "), "ok");
+  banner("Lab rig open: " + parts.join(" + ") + " — the camera rows now show this rig.", "ok");
   return true;
 }
 
@@ -868,10 +914,15 @@ function loadCamRoles() {
 function saveCamRoles() {
   try { localStorage.setItem(ROLE_KEY, JSON.stringify(camRoles)); } catch (e) {}
 }
-/* a pin that carries no colour video can never be a pose camera */
+/* A pin that carries no colour video can never be a pose camera.  The scan
+   already classifies pins (non_video); the name test is only the fallback, and
+   it keeps an RGB/colour pin whose name still says "Depth Camera" — that is
+   exactly what the RealSense colour pin is called. */
 function isColourCam(c) {
   if (c.non_video) return false;
-  return !/depth|infrared|\bir\b/i.test(c.name || "");
+  const n = String(c.name || "");
+  if (/rgb|colou?r/i.test(n)) return true;
+  return !/depth|infrared|\bir\b/i.test(n);
 }
 function sizeForCam(c) {
   if (/azure/i.test(c.name || "")) return {width: 1920, height: 1080};
@@ -946,46 +997,157 @@ function autoAssignCurrent() {
   camRoles = {}; saveCamRoles(); renderRolePanel();
   banner("Roles re-recommended from the connected cameras.", "info");
 }
+/* The compact camera panel: one row per physical colour camera — status dot,
+   name, role select, live fps.  Depth/IR pins never get a row; one muted line
+   reports how many were hidden.  The role state is the same camRoles map used
+   by planRig/openAssigned, so Start sees exactly what the panel shows. */
+function camRoleSelect(cam, role) {
+  const sel = document.createElement("select");
+  sel.title = "Where this camera stands";
+  for (const r of ["side", "front", "rear", "off"]) {
+    const o = document.createElement("option");
+    o.value = r;
+    o.textContent = ROLE_LABEL[r];
+    sel.appendChild(o);
+  }
+  sel.value = role;
+  sel.onchange = () => setRole(cam.index, sel.value);
+  return sel;
+}
+
 function renderRolePanel() {
-  const panel = $("rolePanel"), box = $("roleRows");
-  if (!panel || !box) return;
-  const rgb = (scanCache || []).filter(isColourCam);
-  panel.style.display = rgb.length ? "" : "none";
-  if (!rgb.length) return;
-  const plan = planRig(scanCache);
+  const box = $("cameraRows");
+  if (!box) return;
+  const all = scanCache || [];
+  const rgb = all.filter(isColourCam);
+  const pins = all.length - rgb.length;
+  const pinLine = $("pinsHidden");
+  if (pinLine) pinLine.textContent = pins
+    ? pins + " depth/IR pin" + (pins === 1 ? "" : "s") + " hidden — no colour video, never opened."
+    : "";
+  const plan = planRig(all);
   box.innerHTML = "";
+  if (!rgb.length) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.textContent = "No colour camera yet — plug it in and press Scan.";
+    box.appendChild(empty);
+  }
   for (const c of rgb) {
-    const role = plan.assign[c.name] || "off";
     const row = document.createElement("div");
-    row.style.cssText = "margin:7px 0";
-    const nm = document.createElement("div");
-    nm.style.cssText = "font-size:12.5px; margin-bottom:3px";
+    row.className = "camrow";
+    const dot = document.createElement("span");
+    dot.className = "camdot";
+    dot.id = "camDot" + c.index;
+    dot.title = "closed";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = c.name || ("Camera " + c.index);
     const sz = sizeForCam(c);
-    nm.innerHTML = (c.name || ("Camera " + c.index)) +
-      " <span class='muted'>· index " + c.index + " · " + sz.width + "×" + sz.height + "</span>" +
-      (camRoles[c.name] ? "" : " <span class='muted'>· recommended</span>");
+    nm.title = nm.textContent + " · index " + c.index + " · " + sz.width + "×" + sz.height;
+    const fps = document.createElement("span");
+    fps.className = "camfps";
+    fps.id = "camFps" + c.index;
+    fps.textContent = "–";
+    row.appendChild(dot);
     row.appendChild(nm);
-    const btns = document.createElement("div");
-    btns.style.cssText = "display:flex; gap:5px; flex-wrap:wrap";
-    for (const r of ["side", "front", "rear", "off"]) {
-      const b = document.createElement("button");
-      b.className = role === r ? "active" : "ghost";
-      b.style.cssText = "padding:2px 0; font-size:11.5px; flex:1 1 0; min-width:52px";
-      b.textContent = ROLE_LABEL[r];
-      b.onclick = () => setRole(c.index, r);
-      btns.appendChild(b);
-    }
-    row.appendChild(btns);
+    row.appendChild(camRoleSelect(c, plan.assign[c.name] || "off"));
+    row.appendChild(fps);
     box.appendChild(row);
   }
-  const names = [];
-  if (plan.primary) names.push((plan.side ? "side" : plan.primaryPlane) + " = " + plan.primary.name);
-  if (plan.second) names.push("front = " + plan.second.name);
-  if (plan.third) names.push("rear = " + plan.third.name);
   const hint = $("roleHint");
-  if (hint) hint.textContent = names.length
-    ? "Next activation: " + names.join(" · ") + " (max 3 views — extra cameras stay Off)."
-    : "Every camera is Off — turn at least one on, or press Re-recommend.";
+  if (hint) {
+    hint.textContent = rgb.some(c => plan.assign[c.name] && plan.assign[c.name] !== "off")
+      ? "Roles are remembered per camera name."
+      : "Every camera is Off — pick Side, Front or Rear.";
+  }
+  updateCameraRows();
+}
+
+/* Which open view (1/2/3) carries this camera index, read from /api/state. */
+function camViewFor(index) {
+  const st = lastState || {};
+  if (!st.active) return null;
+  const views = [[1, st.source, st.fps, st.stalled, true],
+                 [2, st.source2, st.fps2, st.stalled2, !!st.has_camera2],
+                 [3, st.source3, st.fps3, st.stalled3, !!st.has_camera3]];
+  const want = "USB camera " + index;
+  for (const v of views) {
+    const label = v[1];
+    if (!v[4] || !label || label === "none") continue;
+    if (String(label) !== want) continue;
+    return {view: v[0], fps: +v[2] || 0, stalled: !!v[3]};
+  }
+  return null;
+}
+function camForLabel(label) {
+  const m = /^USB camera (\d+)$/.exec(String(label || ""));
+  if (!m) return null;
+  return (scanCache || []).find(c => String(c.index) === m[1]) || null;
+}
+function roleForLabel(label) {
+  const cam = camForLabel(label);
+  if (!cam) return "";
+  const role = planRig(scanCache || []).assign[cam.name] || "";
+  return role === "off" ? "" : role;
+}
+/* A non-USB source label reads better as its file/stream name than as a path. */
+function shortSource(label) {
+  const s = String(label || "");
+  if (/^USB camera \d+$/.test(s)) return "";
+  const tail = s.split(/[\\/]/).pop() || s;
+  return tail.length > 24 ? tail.slice(0, 23) + "…" : tail;
+}
+/* One line saying what is actually open, e.g.
+   "side · sagittal 1920×1080 · front · frontal 1280×720". */
+function openViewLine() {
+  const st = lastState || {};
+  if (!st.active) return "No camera open.";
+  const views = [
+    {label: st.source, plane: (st.session && st.session.view_plane) || st.view_plane, on: true},
+    {label: st.source2, plane: st.plane2, on: !!st.has_camera2},
+    {label: st.source3, plane: st.plane3, on: !!st.has_camera3},
+  ];
+  const parts = [];
+  for (const v of views) {
+    if (!v.on || !v.label || v.label === "none") continue;
+    const cam = camForLabel(v.label);
+    const sz = cam ? sizeForCam(cam) : null;
+    const size = sz ? sz.width + "×" + sz.height : "";
+    const tail = [v.plane || "", size].filter(Boolean).join(" ");
+    const head = roleForLabel(v.label) || shortSource(v.label);
+    const bits = [head, tail].filter(Boolean);
+    if (bits.length) parts.push(bits.join(" · "));
+  }
+  if (!parts.length) return "No camera open.";
+  let warn = "";
+  for (const k of ["1", "2", "3"]) {
+    const r = (st.rig || {})[k];
+    const w = r && Array.isArray(r.warnings) ? r.warnings[0] : "";
+    if (w) { warn = w; break; }
+  }
+  return parts.join(" · ") + (warn ? " — ⚠ " + warn : "");
+}
+/* Dots + fps only; called on every poll so a select never loses focus. */
+function updateCameraRows() {
+  for (const c of (scanCache || []).filter(isColourCam)) {
+    const v = camViewFor(c.index);
+    const good = !!v && v.fps > 5 && !v.stalled;
+    const dot = $("camDot" + c.index), fpsEl = $("camFps" + c.index);
+    if (dot) {
+      dot.className = "camdot" + (good ? " ok" : (v ? " warn" : ""));
+      dot.title = !v ? "closed" : (good ? "open · streaming" : "open · slow or stalled");
+    }
+    if (fpsEl) {
+      fpsEl.textContent = v ? (v.fps > 0 ? Math.round(v.fps) + " fps" : "0 fps") : "–";
+      fpsEl.className = camfpsClass(v, good);
+    }
+  }
+  const line = $("rigStatus");
+  if (line) line.textContent = openViewLine();
+}
+function camfpsClass(v, good) {
+  return "camfps" + (good ? " ok" : (v ? " warn" : ""));
 }
 
 /* Scan: list what is connected and report the recommended mapping. */
@@ -1004,7 +1166,7 @@ async function scanAndAssign() {
   if (plan.second) parts.push("front: " + plan.second.name);
   if (plan.third) parts.push("rear: " + plan.third.name);
   banner("Found " + rgb.length + " colour camera" + (rgb.length > 1 ? "s" : "") + " — "
-         + parts.join(" · ") + ". Change a role below if the room is wired differently.", "ok");
+         + parts.join(" · ") + ". Check each role, then press ⚡ Open rig.", "ok");
   return true;
 }
 
@@ -1058,6 +1220,7 @@ async function openAssigned() {
   const parts = [out.source + " (" + plan.primaryPlane + ")"];
   if (out.source2 && out.source2 !== "none") parts.push(out.source2 + " (front)");
   if (out.source3 && out.source3 !== "none") parts.push(out.source3 + " (rear)");
+  if ($("rigStatus")) $("rigStatus").textContent = "Opening " + parts.join(" · ") + "…";
   banner("Activated: " + parts.join(" + "), "ok");
   return true;
 }
@@ -1206,6 +1369,7 @@ async function closeCamera() {
   $("feed3").style.display = "none";
   $("feed3note").style.display = "none";
   $("playbar").className = "playbar";
+  if ($("rigStatus")) $("rigStatus").textContent = "No camera open.";
   banner("Camera closed.", "info");
 }
 
@@ -1297,7 +1461,7 @@ async function startSession() {
     try { st = await (await fetch("/api/state")).json(); } catch (e) {}
     if (!st || !st.active) {
       $("startErr").textContent = "Could not start: no camera is open. Use the Camera card " +
-        "(Scan cameras & assign roles → Activate all assigned).";
+        "(Scan cameras → ⚡ Open rig).";
       banner("Could not start: no camera is open.", "err");
       return;
     }
@@ -1521,6 +1685,24 @@ function liveCadence(live, t) {
 /* ------------------------------------------- charts (metric vs time) ------ */
 const CH_WIN = 90;
 const hist = { t: [], cad: [], kneeL: [], kneeR: [], trunk: [] };
+/* Joint-studies panel: same 1 s poll, its own history aligned to hist.t. */
+const JOINT_DEFS = [
+  {key: "left_knee", label: "LEFT KNEE", color: "#f87171"},
+  {key: "right_knee", label: "RIGHT KNEE", color: "#4ade80"},
+  {key: "left_hip", label: "LEFT HIP", color: "#fb923c"},
+  {key: "right_hip", label: "RIGHT HIP", color: "#38bdf8"},
+  {key: "left_ankle", label: "LEFT ANKLE", color: "#facc15"},
+  {key: "right_ankle", label: "RIGHT ANKLE", color: "#c084fc"},
+  {key: "trunk_lean", label: "TRUNK", color: "#f472b6"},
+];
+/* Only a band for the SAME quantity may colour a joint.  trunk_lean is the
+   signed twin of trunk_lean_fwd, so it reuses that band on the absolute value;
+   an instantaneous knee angle has no band (knee_flexion_max_deg is a peak-flexion
+   norm, not this quantity) and stays neutral rather than mis-colouring. */
+const JOINT_BAND_KEY = {trunk_lean: "trunk_lean_deg"};
+const jointSel = new Set(["left_knee", "right_knee", "trunk_lean"]);
+const jointHist = {};
+for (const j of JOINT_DEFS) jointHist[j.key] = [];
 let histT0 = 0;
 
 function pushHist(live, cad, d) {
@@ -1532,8 +1714,10 @@ function pushHist(live, cad, d) {
   hist.kneeL.push(num(live.knee_flex_l));
   hist.kneeR.push(num(live.knee_flex_r));
   hist.trunk.push(num(live.trunk_lean_fwd));
+  for (const j of JOINT_DEFS) jointHist[j.key].push(num(live[j.key]));
   while (hist.t.length && t - hist.t[0] > CH_WIN) {
     for (const k in hist) hist[k].shift();
+    for (const j of JOINT_DEFS) jointHist[j.key].shift();
   }
 }
 
@@ -1615,6 +1799,176 @@ function drawCharts() {
   drawChart("ch_knee", [{data: hist.kneeL, color: "#f87171"}, {data: hist.kneeR, color: "#4ade80"}],
             BANDS.knee_flexion_max_deg);
   drawChart("ch_trunk", [{data: hist.trunk, color: "#fbbf24"}], BANDS.trunk_lean_deg);
+  drawJointChart();
+}
+
+/* ------------------------------------------------------- joint studies ---- */
+function jointBand(key) {
+  const b = BANDS[JOINT_BAND_KEY[key] || key];
+  return (Array.isArray(b) && b.length === 2) ? b : null;
+}
+function renderJointChips() {
+  const box = $("jointChips");
+  if (!box) return;
+  for (const btn of box.querySelectorAll("[data-joint]")) {
+    const key = btn.getAttribute("data-joint");
+    btn.className = "chip" + (jointSel.has(key) ? " on" : "");
+  }
+}
+function toggleJoint(key) {
+  if (jointSel.has(key)) jointSel.delete(key); else jointSel.add(key);
+  renderJointChips();
+  renderJointGrid();
+  drawJointChart();
+}
+function renderJointGrid() {
+  const box = $("jointGrid");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const j of JOINT_DEFS) {
+    if (!jointSel.has(j.key)) continue;
+    const tile = document.createElement("div");
+    tile.className = "m";
+    tile.id = "jg_" + j.key;
+    tile.style.borderLeft = "3px solid " + j.color;   // matches the chart series
+    const k = document.createElement("div");
+    k.className = "k";
+    k.textContent = j.label;
+    const v = document.createElement("div");
+    v.className = "v";
+    v.id = "jgv_" + j.key;
+    v.textContent = "–";
+    tile.appendChild(k);
+    tile.appendChild(v);
+    box.appendChild(tile);
+  }
+  updateJointValues(lastState ? lastState.live : null);
+}
+function updateJointValues(live) {
+  for (const j of JOINT_DEFS) {
+    const el = $("jgv_" + j.key);
+    if (!el) continue;                      // not selected: no tile in the grid
+    const v = num((live || {})[j.key]);
+    if (v === null) { el.textContent = "–"; el.className = "v"; el.title = ""; continue; }
+    const band = jointBand(j.key);
+    const probe = j.key === "trunk_lean" ? Math.abs(v) : v;
+    el.textContent = j.key === "trunk_lean" ? signed(v, "°", 1) : v.toFixed(1) + "°";
+    el.className = "v" + (band ? (probe >= band[0] && probe <= band[1] ? " ok" : " bad") : "");
+    el.title = band ? "reference band " + band[0] + "–" + band[1] + "°" : "";
+  }
+}
+function drawJointChart() {
+  const series = JOINT_DEFS.filter(j => jointSel.has(j.key))
+                           .map(j => ({data: jointHist[j.key], color: j.color}));
+  drawChart("ch_joints", series, null);
+}
+
+/* ------------------------------------------------------- angle capture ---- */
+let capLog = [], capSessionId = null, captureEnabled = false;
+
+function capAnglesText(angles) {
+  const a = angles || {};
+  const pair = (l, r) => {
+    const lv = num(a[l]), rv = num(a[r]);
+    return (lv === null && rv === null) ? "" : fmt(lv, "°", 0) + "/" + fmt(rv, "°", 0);
+  };
+  const bits = [];
+  const knee = pair("left_knee", "right_knee");
+  if (knee) bits.push("knee " + knee);
+  const hip = pair("left_hip", "right_hip");
+  if (hip) bits.push("hip " + hip);
+  const trunk = num(a.trunk_lean);
+  if (trunk !== null) bits.push("trunk " + signed(trunk, "°", 1));
+  return bits.join(" · ");
+}
+function renderCaptureList() {
+  const ol = $("capList");
+  if (!ol) return;
+  ol.innerHTML = "";
+  for (const rec of capLog) {
+    const li = document.createElement("li");
+    const t = document.createElement("span");
+    t.className = "muted";
+    t.textContent = Number(rec.t || 0).toFixed(1) + " s";
+    li.appendChild(t);
+    li.appendChild(document.createTextNode(
+      " · " + (rec.label || "capture") + " — " + capAnglesText(rec.angles)));
+    ol.appendChild(li);
+  }
+}
+function addCapture(rec) {
+  if (!rec || !rec.angles) return;
+  const key = Number(rec.t || 0).toFixed(2) + "|" + (rec.label || "");
+  for (const c of capLog) {
+    if (Number(c.t || 0).toFixed(2) + "|" + (c.label || "") === key) return;
+  }
+  capLog.unshift(rec);
+  if (capLog.length > 40) capLog.pop();
+  renderCaptureList();
+}
+/* Optional endpoint: older app.py builds do not have it, and then this only
+   reports that in the panel — it never throws and never blocks the poll. */
+async function captureAngles() {
+  const btn = $("btnCapture"), note = $("capNote");
+  if (!btn || btn.disabled) return;
+  const label = ($("capLabel") && $("capLabel").value.trim()) || "";
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/session/capture_angles", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({label: label})
+    });
+    let d = {};
+    try { d = await res.json(); } catch (e) { d = {}; }
+    if (!res.ok || !d.ok) {
+      const gone = (res.status === 404 || res.status === 405);
+      if (note) note.textContent = gone ? "Angle capture is not available in this build."
+                                       : "Capture failed: " + (d.error || ("HTTP " + res.status));
+      return;
+    }
+    const rec = d.capture || d.record || null;
+    if (rec && rec.angles) {
+      addCapture(rec);
+      if (note) note.textContent = "Captured · " + (rec.label || "capture") + " at "
+        + Number(rec.t || 0).toFixed(1) + " s.";
+    } else if (note) {
+      note.textContent = "Captured (this build returns no record to show).";
+    }
+    if ($("capLabel")) $("capLabel").value = "";
+  } catch (e) {
+    if (note) note.textContent = "Angle capture needs the updated app — endpoint unavailable.";
+  } finally {
+    if (btn) btn.disabled = !captureEnabled;
+  }
+}
+/* Runs inside the existing poll: enable/disable the capture button, keep the
+   count from state.joint_study and seed the list after a page reload. */
+function updateJointStudy(d) {
+  const js = (d && d.joint_study) || null;
+  const recording = !!(d && d.session);
+  captureEnabled = recording;
+  const btn = $("btnCapture");
+  if (btn) {
+    btn.disabled = !recording;
+    btn.title = recording ? "Store this frame's angles with the session"
+                          : "Start a session to capture angles";
+  }
+  const sid = d && d.session ? d.session.id : null;
+  if (sid !== null && sid !== undefined && sid !== capSessionId) {
+    capSessionId = sid;
+    capLog = [];
+    renderCaptureList();
+  }
+  if (recording && js && js.last && js.last.angles) addCapture(js.last);
+  const cnt = $("capCount");
+  if (cnt) {
+    const n = Math.max((js && typeof js.captures === "number") ? js.captures : 0,
+                       capLog.length);
+    cnt.textContent = recording
+      ? n + " capture" + (n === 1 ? "" : "s") + " this session"
+      : "not recording — start a session to capture angles";
+  }
+  updateJointValues(d ? d.live : null);
 }
 
 function updateBigNumbers(live, cad, d) {
@@ -1827,6 +2181,8 @@ async function poll() {
   updateBigNumbers(live, cad, d);
   if (d.active && (live.pose_found || live.l_ankle_y !== undefined)) pushHist(live, cad, d);
   drawCharts();
+  updateCameraRows();
+  updateJointStudy(d);
 
   const s = d.session;
   if (s) {
@@ -2133,6 +2489,8 @@ $("useCam2").addEventListener("change", () => {
 $("useCam3").addEventListener("change", () => {
   $("cam3Box").style.display = $("useCam3").checked ? "" : "none";
 });
+renderJointChips();
+renderJointGrid();
 refreshCams();
 refreshSessions();
 refreshPatients();

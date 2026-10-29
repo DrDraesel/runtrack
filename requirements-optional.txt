@@ -1,1 +1,6 @@
 # Optional pose backend only: pip install rtmlib onnxruntime  (RTMPose; the default MediaPipe path works without it — pose_backends.py imports it lazily)
+# GPU on Windows without a CUDA toolkit: use the DirectML wheel instead of plain
+# onnxruntime —  pip install rtmlib onnxruntime-directml
+# It provides the same `onnxruntime` module and adds DmlExecutionProvider
+# (verified on the RTX 5070 Ti).  Select it with RUNTRACK_ORT_PROVIDER=directml,
+# or leave the default `auto` and it is picked automatically (see config.ORT_PROVIDER).

@@ -58,6 +58,19 @@ POSE_BACKEND = os.environ.get("RUNTRACK_POSE_BACKEND", "mediapipe").strip().lowe
 if POSE_BACKEND not in POSE_BACKENDS:
     POSE_BACKEND = "mediapipe"
 
+# ONNX Runtime execution provider for the RTMPose backend (ignored by
+# MediaPipe, which does not use ONNX Runtime at all):
+#   auto      DirectML if the installed onnxruntime exposes
+#             DmlExecutionProvider (the Windows GPU path — DirectX 12, no CUDA
+#             toolkit and no admin rights needed), else CUDA if it exposes
+#             CUDAExecutionProvider, else CPU
+#   cpu       CPUExecutionProvider (always available)
+#   directml  DmlExecutionProvider (needs the onnxruntime-directml wheel)
+#   cuda      CUDAExecutionProvider (needs onnxruntime-gpu + CUDA + cuDNN)
+# An unavailable provider never raises: pose_backends logs the reason and runs
+# on CPU instead.  Pose always works; the setting only decides how fast.
+ORT_PROVIDER = os.environ.get("RUNTRACK_ORT_PROVIDER", "auto")
+
 DEFAULT_DURATION_S = 60   # default run session duration
 MAX_DURATION_S = 900
 MAX_UPLOAD_MB = 800
@@ -277,6 +290,26 @@ DEFAULT_PLANE3 = "frontal"          # front camera measures the frontal plane
 DEFAULT_DIRECTION3 = "front"        # camera facing: front / rear
 DIRECTIONS = ("front", "rear")      # accepted camera-facing labels
 MAX_VIEWS = 3                       # primary + second + third; no fourth view
+
+# ------------------------------------------------------- camera watchdogs
+# A camera that stops delivering frames used to freeze the whole app silently:
+# the capture loop slept and retried forever, so the state snapshot (fps,
+# elapsed, rows) never advanced and `error` stayed null — a dead camera looked
+# exactly like a hung UI.  The loop now stamps every good frame per view.
+CAM_STALL_S = 2.0           # PRIMARY view: no frame for this long is FATAL.
+                            # The loop sets `error` (naming the source label and
+                            # the seconds of silence), clears `active` and
+                            # finalizes a running session as "camera_stalled"
+                            # instead of spinning quietly.
+CAM_VIEW_TIMEOUT_S = 0.6    # SECOND/THIRD view: a view with no new frame for
+                            # this long counts one timeout.  Those views are
+                            # read on their own threads (a blocked read can no
+                            # longer slow the primary or the other extra view),
+                            # and the loop only ever waits ~20 ms on them.
+CAM_VIEW_DROP_AFTER = 10    # consecutive timeouts before an extra view is
+                            # dropped: reading stops, warn2/warn3 says the view
+                            # stopped delivering frames, and the remaining views
+                            # keep recording at full rate.
 
 # -------------------------------------------------- aero (frontal area)
 # Video-based projected frontal area: MediaPipe segmentation mask per frame,

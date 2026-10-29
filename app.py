@@ -31,12 +31,14 @@ import config
 import cycling as CY
 import depth_metrics as DM
 import gait_events as GA
+import joint_study as JSTUDY
 import live_monitor
 import metrics as M
 import report as R
 import rigcheck as RC
 import second_view as SV
 from filters import LandmarkFilter
+import pose_backends as PBK
 from pose_backends import make_backend
 from pose_engine import (PoseEngine, draw_cycling_overlay, draw_skeleton,
                          make_crop_refiner, overlay_angles, person_crop_box)
@@ -55,7 +57,7 @@ class Live:
         self.thread = None
         self.stop_evt = threading.Event()
         self.active = False
-        self.error = None
+        self.error: str | None = None
         self.source = None            # {"kind": ..., ...}
         self.source_label = "none"
         self.latest_jpeg = None
@@ -97,6 +99,26 @@ class Live:
         # per-view placement check (framing/coverage/pitch/px-per-m), refreshed
         # about once a second by the capture loop; operator feedback only
         self.rig: dict = {}
+        # ---- per-view camera watchdogs (config.CAM_* ) -------------------
+        # monotonic stamp of the last good frame + frames received, per view.
+        # /api/state turns these into frame_age_s / view_status at request
+        # time, so a loop blocked inside a blocked camera read still reports
+        # how long the silence has lasted instead of a frozen snapshot.
+        self.frame_t1: float | None = None
+        self.frame_t2: float | None = None
+        self.frame_t3: float | None = None
+        self.frames1 = 0
+        self.frames2 = 0
+        self.frames3 = 0
+        self.open_t: float | None = None   # when the capture loop armed the views
+        self.stalled = False               # view 1: CAM_STALL_S of silence (sticky)
+        self.stalled2 = False              # view 2: dropped by the watchdog
+        self.stalled3 = False              # view 3: dropped by the watchdog
+        # last frame that actually carried joint angles (monotonic stamp) — an
+        # operator "capture angles" tap must survive a single frame where the
+        # pose model lost the body, instead of answering "no angles"
+        self.last_angles: dict = {}
+        self.last_angles_t: float | None = None
 
     def reset(self):
         self.stop_evt = threading.Event()
@@ -106,6 +128,13 @@ class Live:
         self.live = {}
         self.fps = 0.0
         self.frames_seen = 0
+        self.frame_t1 = self.frame_t2 = self.frame_t3 = None
+        self.frames1 = self.frames2 = self.frames3 = 0
+        self.open_t = None
+        self.stalled = self.stalled2 = self.stalled3 = False
+        self.last_angles = {}
+        self.last_angles_t = None
+
         self.playback_speed = 1.0
         self.paused = False
         self.seek_t = None
@@ -291,6 +320,11 @@ def _finalize(reason="complete"):
             summary.setdefault("labels", []).append(
                 f"video playback was scrubbed during this session "
                 f"({seeks} seek jumps) — the time axis has gaps")
+        # ---- joint-angle study: operator captures + per-joint session stats --
+        # Written here (once) so the summary, the report and the API all read
+        # the same numbers; joint_study never invents a value a frame lacked.
+        summary["angle_captures"] = list(sess.get("angle_captures") or [])
+        summary["joint_study"] = JSTUDY.summarize(rows)
         advisor.enrich(summary)
         # ---- second view (rear / side): its own time base, its own plane ----
         if discipline == "running" and rows2:
@@ -345,6 +379,26 @@ def _finalize(reason="complete"):
         if reason == "stopped":
             summary["note"] = "session stopped early by operator"
             status = "complete" if elapsed >= 5 else "incomplete"
+        elif reason == "camera_stalled":
+            # The primary camera went silent mid-recording.  Say it in the
+            # summary in plain English instead of presenting a short session
+            # as if it simply ended: the metrics cover only the frames before
+            # the stall, and the report/CSV keep that fact.
+            label = (source1_label
+                     if source1_label not in (None, "", "none") else "the camera")
+            note = (f"recording stopped early: {label} stopped delivering frames "
+                    f"(no new frame for more than {config.CAM_STALL_S:.0f} s). "
+                    f"Metrics describe only the frames recorded before the "
+                    f"stall ({len(rows)} frames, {elapsed:.1f} s).")
+            dq = summary.get("data_quality")
+            if not isinstance(dq, dict):
+                dq = summary["data_quality"] = {}
+            dq["camera_stalled"] = True
+            dq["camera_stalled_at_s"] = round(float(elapsed or 0.0), 2)
+            dq["camera_stalled_source"] = str(label)
+            summary["note"] = note
+            summary.setdefault("labels", []).append(note)
+            status = "incomplete"
         STORE.save_csv(sid, rows)
         STORE.finish_session(sid, summary.get("duration_s", elapsed), len(rows),
                              summary, status=status)
@@ -366,6 +420,193 @@ def _finalize(reason="complete"):
 
 
 # ------------------------------------------------------------ capture loop --
+
+# Hard cap on how long the capture loop ever waits on an extra view per
+# iteration.  The requirement is "never block more than about 50 ms"; 20 ms
+# keeps the primary at full rate even while two extra views are starved.
+_VIEW_POLL_S = 0.02
+
+
+class _ViewReader:
+    """Owns one optional view's capture and reads it on its own thread.
+
+    Why this exists: the loop used to call ``cap2.read()`` / ``cap3.read()``
+    sequentially on the single capture thread, so one camera whose ``read()``
+    blocked (~1 s per frame) capped EVERY view at ~1 fps — measured live with a
+    dead RealSense: ``fps = fps2 = fps3 = 1.0`` and ``error`` stayed null.
+
+    The reader keeps only the NEWEST frame and hands it to the loop with its own
+    monotonic stamp, so the loop can never be blocked by that device.  All calls
+    into the capture object (read / get / set / release) happen on the owner
+    thread — never concurrently with the loop.
+
+    The depth sampler and intrinsics travel with the frame (read immediately
+    after ``cap.read()``, as the old sequential loop did) so ``DG.DepthGait()``
+    keeps getting a matched frame+depth pair for a RealSense depth source.
+    """
+
+    def __init__(self, cap, label: str = "view", is_file: bool = False,
+                 pace: float = 0.0):
+        self.cap = cap
+        self.label = str(label)
+        self.is_file = bool(is_file)
+        self.pace = max(0.0, float(pace or 0.0))
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._paused = threading.Event()
+        self._seek = None
+        self._frame = None
+        self._t: float | None = None
+        self._pos_ms: float | None = None
+        self._depth_at = None
+        self._intrinsics = None
+        self._seq = 0
+        self._seen = 0
+        self.thread = threading.Thread(target=self._run, daemon=True,
+                                       name=f"capture-{self.label}")
+
+    # -- lifecycle ------------------------------------------------------
+    def start(self):
+        self.thread.start()
+        return self
+
+    def stop(self, join: bool = True, timeout: float = 1.0):
+        """Stop reading.  ``join=False`` never delays the loop on a dead device."""
+        self._stop.set()
+        if join and self.thread.is_alive():
+            self.thread.join(timeout=timeout)
+
+    def request_seek(self, t: float):
+        """Seek this source (the owner thread applies it before the next read)."""
+        with self._lock:
+            self._seek = max(0.0, float(t))
+
+    def set_paused(self, flag: bool):
+        """Freeze this source with the primary (slow-motion / scrub playback).
+
+        Without this a paused video's extra views would keep advancing on their
+        own threads and drift away from the paused primary.
+        """
+        if flag:
+            self._paused.set()
+        else:
+            self._paused.clear()
+
+    def age(self, fallback_t: float | None = None) -> float | None:
+        """Seconds since this view's last good frame (None = never delivered)."""
+        with self._lock:
+            t = self._t
+        if t is None:
+            t = fallback_t
+        return None if t is None else max(0.0, time.monotonic() - t)
+
+    # -- the loop's view of the device ----------------------------------
+    def latest(self, timeout: float = _VIEW_POLL_S):
+        """Newest frame not yet handed out, or None within ``timeout`` seconds."""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            with self._lock:
+                if self._seq != self._seen and self._frame is not None:
+                    self._seen = self._seq
+                    return {"frame": self._frame, "t": self._t,
+                            "seq": self._seq, "pos_ms": self._pos_ms,
+                            "depth_at": self._depth_at,
+                            "intrinsics": self._intrinsics}
+            remain = deadline - time.monotonic()
+            if remain <= 0.0:
+                return None
+            time.sleep(min(0.004, remain))
+
+    # -- owner thread ---------------------------------------------------
+    def _run(self):
+        try:
+            while not self._stop.is_set():
+                if self._paused.is_set():
+                    time.sleep(0.02)     # paused video: hold the frame, no drift
+                    continue
+                with self._lock:
+                    seek = self._seek
+                    self._seek = None
+                if seek is not None:
+                    try:
+                        self.cap.set(cv2.CAP_PROP_POS_MSEC, seek * 1000.0)
+                    except Exception:
+                        pass
+                t0 = time.monotonic()
+                try:
+                    ok, fr = self.cap.read()
+                except Exception:
+                    ok, fr = False, None
+                if not ok or fr is None:
+                    time.sleep(0.01)     # a dead device must never spin this thread
+                    continue
+                t = time.monotonic()
+                pos = None
+                if self.is_file:
+                    try:
+                        pos = max(0.0, float(
+                            self.cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0)
+                    except Exception:
+                        pos = None
+                # depth belongs to THIS frame: grab the sampler before the next
+                # read can replace the depth map
+                depth_at = getattr(self.cap, "depth_at", None)
+                intr = getattr(self.cap, "intrinsics", None)
+                with self._lock:
+                    self._frame = fr
+                    self._t = t
+                    self._pos_ms = pos
+                    self._depth_at = depth_at
+                    self._intrinsics = intr
+                    self._seq += 1
+                if self.pace:            # file source: honour its own frame rate
+                    dt = time.monotonic() - t0
+                    if dt < self.pace:
+                        time.sleep(self.pace - dt)
+        finally:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+
+
+def _file_pace(cap) -> float:
+    """Seconds per frame for a file source (0.0 = let the device pace itself)."""
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    except Exception:
+        return 0.0
+    return (1.0 / fps) if 5.0 <= fps <= 120.0 else 0.0
+
+
+def _drop_view(which: int, reader: "_ViewReader"):
+    """An extra view stopped delivering: drop it LOUDLY, keep the other views.
+
+    Reading stops (the owner thread exits after its blocked read returns and
+    releases the camera), the warning says what happened and that recording
+    continues on the remaining views, and the view is marked stalled.
+    """
+    with L.lock:
+        label = (L.source2_label if which == 2 else L.source3_label) or f"view {which}"
+        role = "second" if which == 2 else "third"
+        age = reader.age()
+        msg = (f"{role} view ({label}) stopped delivering frames"
+               + (f" (no frame for {age:.1f} s)" if age is not None else "")
+               + f" — dropped; the other views keep recording")
+        if which == 2:
+            L.warn2 = msg
+            L.stalled2 = True
+            L.fps2 = 0.0
+            L.live2 = {}
+            L.latest_jpeg2 = None
+        else:
+            L.warn3 = msg
+            L.stalled3 = True
+            L.fps3 = 0.0
+            L.live3 = {}
+            L.latest_jpeg3 = None
+    reader.stop(join=False)
+
 
 def _hud(frame, fm, fps, sess):
     h, w = frame.shape[:2]
@@ -390,6 +631,9 @@ def _loop(src: dict):
     cap = None
     cap2 = None
     cap3 = None
+    reader2 = None                 # owns cap2 and reads it off this thread
+    reader3 = None                 # owns cap3 and reads it off this thread
+    owned_ids: set = set()         # caps a reader releases itself (never double-free)
     engine = None
     engine2 = None
     engine3 = None
@@ -400,6 +644,7 @@ def _loop(src: dict):
     si2 = SideIdentity() if config.SIDE_IDENTITY_ENABLED else None
     si3 = SideIdentity() if config.SIDE_IDENTITY_ENABLED else None
     ended_naturally = False
+    stalled_primary = False
     try:
         cap = cameras.open_source(**{k: v for k, v in src.items()
                                      if k not in ("seg", "source2", "source3")})
@@ -421,6 +666,11 @@ def _loop(src: dict):
             else:
                 engine2 = make_backend(model_path=config.MODEL_PATH,
                                        seg=bool(src2.get("seg")))
+                is_file2 = src2.get("kind") == "file"
+                reader2 = _ViewReader(cap2, "view2", is_file=is_file2,
+                                      pace=_file_pace(cap2) if is_file2 else 0.0)
+                reader2.start()
+                owned_ids.add(id(cap2))
         # metric-scale foot metrics are only meaningful when the view carries
         # depth; a plain UVC camera yields none and the accumulator stays off
         dgait = (DM.DepthGait()
@@ -436,6 +686,11 @@ def _loop(src: dict):
             else:
                 engine3 = make_backend(model_path=config.MODEL_PATH,
                                        seg=bool(src3.get("seg")))
+                is_file3 = src3.get("kind") == "file"
+                reader3 = _ViewReader(cap3, "view3", is_file=is_file3,
+                                      pace=_file_pace(cap3) if is_file3 else 0.0)
+                reader3.start()
+                owned_ids.add(id(cap3))
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         is_file = src.get("kind") == "file"
         is_file2 = bool(src2) and src2.get("kind") == "file"
@@ -452,6 +707,16 @@ def _loop(src: dict):
         fps2, fps2_n, fps2_t = 0.0, 0, time.time()
         fps3, fps3_n, fps3_t = 0.0, 0, time.time()
         rig_t = 0.0
+        # ---- arm the per-view watchdogs: every view starts "never delivered"
+        t_start = time.monotonic()
+        last_ok1 = t_start
+        miss2 = miss3 = 0
+        with L.lock:
+            L.open_t = t_start
+            L.frame_t1 = L.frame_t2 = L.frame_t3 = None
+            L.frames1 = L.frames2 = L.frames3 = 0
+            L.stalled = L.stalled2 = L.stalled3 = False
+
         while not L.stop_evt.is_set():
             t_frame = time.monotonic()
             with L.lock:
@@ -460,13 +725,28 @@ def _loop(src: dict):
                 paused = bool(L.paused) and is_file
                 speed = float(L.playback_speed) if is_file else 1.0
             if paused and seek_t is None:
+                # pause the extra views with the primary: their own threads
+                # would otherwise keep advancing through the clip
+                for _r in (reader2, reader3):
+                    if _r is not None:
+                        _r.set_paused(True)
                 time.sleep(0.05)
                 continue
+            for _r in (reader2, reader3):
+                if _r is not None:
+                    _r.set_paused(False)
             if is_file and seek_t is not None:
-                for c_ in (cap, cap2, cap3):
-                    if c_ is not None:
+                try:
+                    cap.set(cv2.CAP_PROP_POS_MSEC,
+                            max(0.0, float(seek_t)) * 1000.0)
+                except Exception:
+                    pass
+                # extra views seek on their OWN thread: the loop must never
+                # touch a capture object a reader thread is reading
+                for _r in (reader2, reader3):
+                    if _r is not None:
                         try:
-                            c_.set(cv2.CAP_PROP_POS_MSEC, max(0.0, float(seek_t)) * 1000.0)
+                            _r.request_seek(seek_t)
                         except Exception:
                             pass
                 lf.reset()                    # new time base -> restart smoothing
@@ -480,46 +760,80 @@ def _loop(src: dict):
                     lf3.reset()
                 if si3 is not None:
                     si3.reset()
-            ok, frame = cap.read()
-            if not ok:
+            try:
+                ok, frame = cap.read()
+            except Exception:
+                ok, frame = False, None
+            if not ok or frame is None:
                 if is_file:
                     ended_naturally = True
                     break
+                # ---- silent-camera bug (session 43) -----------------------
+                # A camera that stops delivering used to spin here forever:
+                # no state update, error null, elapsed frozen, UI hung.  Keep
+                # the snapshot alive (fps decays, the frame age grows) and make
+                # the stall a loud, final error once CAM_STALL_S is exceeded.
+                t_wall = time.time()
+                if t_wall - fps_t >= 1.0:
+                    fps = fps_n / (t_wall - fps_t)   # 0 frames -> 0 fps
+                    fps_n, fps_t = 0, t_wall
+                age1 = time.monotonic() - last_ok1
+                stalled_now = age1 >= config.CAM_STALL_S
+                with L.lock:
+                    L.fps = fps
+                    if isinstance(L.live, dict) and L.live:
+                        live_now = dict(L.live)
+                        live_now["fps"] = round(fps, 1)
+                        live_now["t"] = t_wall
+                        L.live = live_now
+                    L.stalled = bool(L.stalled or stalled_now)
+                    label = L.source_label or "primary camera"
+                if stalled_now:
+                    with L.lock:
+                        L.error = (f"camera '{label}' stopped delivering frames: "
+                                   f"no frame for {age1:.1f} s (limit "
+                                   f"{config.CAM_STALL_S:.1f} s) — capture stopped")
+                        L.stalled = True
+                        L.active = False
+                    stalled_primary = True
+                    break
                 time.sleep(0.05)
                 continue
-            # ---- second camera (best effort: never blocks the primary)
-            frame2 = None
-            vt2 = None
-            if cap2 is not None:
-                try:
-                    ok2, fr2 = cap2.read()
-                    if ok2:
-                        frame2 = fr2
-                except Exception:
-                    frame2 = None
+            last_ok1 = time.monotonic()
+            # ---- second camera: READ ON ITS OWN THREAD (never blocks here) --
+            pay2 = reader2.latest() if reader2 is not None else None
+            frame2 = pay2["frame"] if pay2 is not None else None
             # second view keeps its OWN clock: a 60 fps rear clip next to a
             # 30 fps side clip must not be analysed on the primary's time axis
-            if frame2 is not None and cap2 is not None and is_file2:
-                try:
-                    vt2 = max(0.0, float(cap2.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0)
-                except Exception:
-                    vt2 = None
-            # ---- third camera (best effort: never blocks the primary)
-            frame3 = None
-            vt3 = None
-            if cap3 is not None:
-                try:
-                    ok3, fr3 = cap3.read()
-                    if ok3:
-                        frame3 = fr3
-                except Exception:
-                    frame3 = None
-            # the third view's own clock mirrors the second view's rule
-            if frame3 is not None and cap3 is not None and is_file3:
-                try:
-                    vt3 = max(0.0, float(cap3.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0)
-                except Exception:
-                    vt3 = None
+            vt2 = (pay2.get("pos_ms")
+                   if (pay2 is not None and is_file2) else None)
+            if reader2 is not None:
+                if pay2 is not None:
+                    miss2 = 0
+                elif (reader2.age(t_start) or 0.0) >= config.CAM_VIEW_TIMEOUT_S:
+                    miss2 += 1
+                else:
+                    miss2 = 0
+                if miss2 >= config.CAM_VIEW_DROP_AFTER:
+                    _drop_view(2, reader2)
+                    reader2 = None
+                    frame2, vt2 = None, None
+            # ---- third camera: same contract (own thread, own clock) --------
+            pay3 = reader3.latest() if reader3 is not None else None
+            frame3 = pay3["frame"] if pay3 is not None else None
+            vt3 = (pay3.get("pos_ms")
+                   if (pay3 is not None and is_file3) else None)
+            if reader3 is not None:
+                if pay3 is not None:
+                    miss3 = 0
+                elif (reader3.age(t_start) or 0.0) >= config.CAM_VIEW_TIMEOUT_S:
+                    miss3 += 1
+                else:
+                    miss3 = 0
+                if miss3 >= config.CAM_VIEW_DROP_AFTER:
+                    _drop_view(3, reader3)
+                    reader3 = None
+                    frame3, vt3 = None, None
             with L.lock:
                 L.frames_seen += 1
             vt = None
@@ -571,10 +885,11 @@ def _loop(src: dict):
                 if fm2:
                     fm2.update(M.world_joint_angles(
                         getattr(engine2, "last_world", None)))
-                if dgait is not None and lms2 is not None:
+                if dgait is not None and lms2 is not None and pay2 is not None:
                     try:
-                        fm2.update(dgait.update(lms2, cap2.depth_at,
-                                                cap2.intrinsics))
+                        # frame + depth sampler come as a pair from the reader
+                        fm2.update(dgait.update(lms2, pay2.get("depth_at"),
+                                                pay2.get("intrinsics")))
                     except Exception:
                         pass
                 if src2.get("seg") and engine2.seg_frac is not None:
@@ -676,6 +991,8 @@ def _loop(src: dict):
                 if is_file and vt is not None:
                     L.video_t = vt
                 L.fps = fps
+                L.frames1 = int(L.frames1) + 1
+                L.frame_t1 = last_ok1
                 L.live = {"pose_found": lms is not None, "fps": round(fps, 1),
                           "t": now, "view_plane": L.view_plane,
                           "video_t": L.video_t if is_file else None,
@@ -683,8 +1000,16 @@ def _loop(src: dict):
                           "paused": paused,
                           **({"identity": ident} if ident else {}),
                           **{k: v for k, v in fm.items() if not k.startswith("_")}}
+                # remember the last frame that carried angles: the operator's
+                # capture tap uses it when this frame lost the body
+                _angles_now = JSTUDY.snapshot(fm)
+                if _angles_now:
+                    L.last_angles = _angles_now
+                    L.last_angles_t = t_mono
                 if frame2 is not None:
                     L.fps2 = fps2
+                    L.frames2 = int(L.frames2) + 1
+                    L.frame_t2 = (pay2 or {}).get("t") or t_mono
                     L.live2 = {"pose_found": bool(fm2), "fps": round(fps2, 1),
                                "view_plane": L.plane2,
                                **({"identity": ident2} if ident2 else {}),
@@ -692,6 +1017,8 @@ def _loop(src: dict):
                                   if not k.startswith("_")}}
                 if frame3 is not None:
                     L.fps3 = fps3
+                    L.frames3 = int(L.frames3) + 1
+                    L.frame_t3 = (pay3 or {}).get("t") or t_mono
                     L.live3 = {"pose_found": bool(fm3), "fps": round(fps3, 1),
                                "view_plane": L.plane3,
                                "direction": L.direction3,
@@ -807,6 +1134,15 @@ def _loop(src: dict):
         with L.lock:
             L.error = f"capture error: {e}"
     finally:
+        # extra views: stop the owner threads FIRST (they release their own
+        # capture); a device stuck in read() must not delay shutdown beyond a
+        # moment, so the join is bounded.
+        for _r in (reader2, reader3):
+            if _r is not None:
+                try:
+                    _r.stop(join=True, timeout=0.75)
+                except Exception:
+                    pass
         if engine is not None:
             engine.close()
         if engine2 is not None:
@@ -815,14 +1151,21 @@ def _loop(src: dict):
             engine3.close()
         if cap is not None:
             cap.release()
-        if cap2 is not None:
-            cap2.release()
-        if cap3 is not None:
-            cap3.release()
+        for c_ in (cap2, cap3):
+            if c_ is not None and id(c_) not in owned_ids:
+                try:
+                    c_.release()
+                except Exception:
+                    pass
         with L.lock:
             L.active = False
     # file ended while recording → finalize as complete
-    if ended_naturally:
+    if stalled_primary:
+        # the primary camera went silent: close the session with an honest
+        # reason (data_quality.camera_stalled + a plain-English note) instead
+        # of leaving it running forever
+        _finalize("camera_stalled")
+    elif ended_naturally:
         _finalize("complete")
 
 
@@ -921,6 +1264,45 @@ def _live_bike(sess, disc, run):
         return None
 
 
+def _view_status_locked() -> dict:
+    """Per-view camera health: {"1","2","3"} -> ok/stalled/age_s/frames.
+
+    Caller must hold ``L.lock``.  Ages are computed at request time from the
+    monotonic stamp of each view's last good frame, so even a loop that is
+    currently blocked inside a camera read reports how long the silence has
+    lasted instead of a frozen snapshot (the session-43 symptom).
+
+    ``stalled`` for view 1 is live (age past ``config.CAM_STALL_S``) and sticky
+    once the loop gave up; for views 2/3 it means the reader was dropped after
+    ``config.CAM_VIEW_DROP_AFTER`` consecutive timeouts.
+    """
+    now = time.monotonic()
+    active = bool(L.active)
+    # a deliberately paused video is not a stalled camera
+    paused = bool(getattr(L, "paused", False)) and bool(
+        (L.source or {}).get("kind") == "file")
+    out: dict = {}
+    for key, present, ft, n in (("1", True, L.frame_t1, L.frames1),
+                                ("2", bool(L.source2), L.frame_t2, L.frames2),
+                                ("3", bool(L.source3), L.frame_t3, L.frames3)):
+        frames = int(n or 0)
+        if not present:
+            out[key] = {"ok": False, "stalled": False, "age_s": None,
+                        "frames": 0}
+            continue
+        base = ft if ft is not None else (L.open_t if active else None)
+        age = round(max(0.0, now - base), 2) if base is not None else None
+        if key == "1":
+            stalled = bool(L.stalled) or (
+                active and not paused and age is not None
+                and age >= config.CAM_STALL_S)
+        else:
+            stalled = bool(L.stalled2 if key == "2" else L.stalled3)
+        out[key] = {"ok": bool(active and not stalled and frames > 0),
+                    "stalled": stalled, "age_s": age, "frames": frames}
+    return out
+
+
 def _build_state() -> dict:
     """Snapshot of the live state (shared by /api/state and the AI monitor chat)."""
     with L.lock:
@@ -929,6 +1311,7 @@ def _build_state() -> dict:
         disc = str((sess or {}).get("discipline") or L.discipline or
                    config.DEFAULT_DISCIPLINE)
         latch = (sess or {}).get("latch")
+        vs = _view_status_locked()
         st = {
             "active": L.active,
             "source": L.source_label,
@@ -937,6 +1320,16 @@ def _build_state() -> dict:
             "error": L.error,
             "warning2": L.warn2,
             "warning3": L.warn3,
+            # ---- per-view camera health (additive; watchdog state) ----------
+            # frame ages are seconds since that view's last good frame; a
+            # stalled primary is a fatal, already-reported condition.
+            "frame_age_s": vs["1"]["age_s"],
+            "frame_age2_s": vs["2"]["age_s"],
+            "frame_age3_s": vs["3"]["age_s"],
+            "stalled": vs["1"]["stalled"],
+            "stalled2": vs["2"]["stalled"],
+            "stalled3": vs["3"]["stalled"],
+            "view_status": vs,
             "fps": round(L.fps, 1),
             "fps2": round(L.fps2, 1),
             "fps3": round(L.fps3, 1),
@@ -957,6 +1350,15 @@ def _build_state() -> dict:
             "bike_live": _live_bike(sess, disc, run),
             "playback": L.playback_state(),
             "media": dict(L.media or {}),
+            # which pose engine/session provider is actually running (mediapipe
+            # on CPU vs rtmpose on DmlExecutionProvider ...) — measured, not
+            # configured: a silently downgraded backend is visible here
+            "pose": PBK.backend_info(),
+            # joint-angle study: capture count + newest capture for the UI
+            # (null when no session is running, like the session block)
+            "joint_study": (JSTUDY.overview(
+                {"angle_captures": sess.get("angle_captures")})
+                if (sess and run) else None),
             "session": None if not (sess and run) else {
                 "id": sess["id"],
                 "elapsed": round(sess.get("elapsed", 0.0), 1),
@@ -1235,10 +1637,38 @@ def api_session_start():
     phone = (data.get("phone") or "").strip()
     if not name or not phone:
         return jsonify({"ok": False, "error": "name and phone are required"}), 400
-    if not L.active:
+    with L.lock:
+        active = bool(L.active)
+        vs = _view_status_locked()
+        cam_error = L.error
+        label2 = L.source2_label
+        label3 = L.source3_label
+    if not active:
         return jsonify({"ok": False, "error": "open a camera first"}), 400
+    if vs["1"]["stalled"]:
+        # never start a session on a camera that is not delivering: the old
+        # behaviour recorded one row and looked "hung" for the whole session
+        age = vs["1"]["age_s"]
+        why = f" (no frame for {age:.1f} s)" if age is not None else ""
+        detail = f" — {cam_error}" if cam_error else ""
+        return jsonify({
+            "ok": False,
+            "error": (f"the primary camera is not delivering frames{why}{detail}."
+                      " Reopen the camera before starting a session."),
+        }), 400
     if L.session and not L.session.get("finalized"):
         return jsonify({"ok": False, "error": "a session is already running"}), 400
+    # An extra view that was dropped by the watchdog cannot come back without
+    # reopening the rig: say so instead of silently recording one view fewer.
+    warnings = []
+    if vs["2"]["stalled"]:
+        warnings.append(f"the second view ({label2}) stopped delivering frames "
+                        "and is not being recorded — this session covers the "
+                        "remaining views only")
+    if vs["3"]["stalled"]:
+        warnings.append(f"the third view ({label3}) stopped delivering frames "
+                        "and is not being recorded — this session covers the "
+                        "remaining views only")
 
     def _num(key):
         v = data.get(key)
@@ -1292,9 +1722,51 @@ def api_session_start():
                      "source3_label": L.source3_label,
                      "rows3": [], "t0_video3": None, "t0_3": None}
         L.last_report_sid = None
-    return jsonify({"ok": True, "session_id": sid, "duration": dur,
-                    "view_plane": plane, "discipline": discipline,
-                    "bike_type": bike_type})
+    payload = {"ok": True, "session_id": sid, "duration": dur,
+               "view_plane": plane, "discipline": discipline,
+               "bike_type": bike_type}
+    if warnings:
+        payload["warning"] = " ".join(warnings)
+    return jsonify(payload)
+
+
+@app.post("/api/session/capture_angles")
+def api_session_capture_angles():
+    """Store one labelled joint-angle snapshot on the running session.
+
+    The operator's "capture this angle" tap.  Angles come from the live frame
+    metrics already computed by the capture loop (aspect-corrected upstream) —
+    nothing is recomputed here, and a joint the pose model did not see stays
+    absent (``joint_study.capture`` raises instead of writing an empty record).
+    """
+    if not _origin_ok():
+        abort(403)
+    data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
+    label = data.get("label")
+    with L.lock:
+        sess = L.session
+        running = bool(sess and not sess.get("finalized")
+                       and not sess.get("finalizing"))
+        live = dict(L.live or {})
+        last = dict(L.last_angles or {})
+        last_t = L.last_angles_t
+    if not running or sess is None:
+        return jsonify({"ok": False, "error": "no running session"}), 400
+    # one lost frame must not throw the operator's tap away: fall back to the
+    # most recent frame that did carry angles and say so in the record
+    angles, source = live, "live frame"
+    if not JSTUDY.snapshot(live) and last:
+        angles, source = last, "last tracked frame"
+    try:
+        rec = JSTUDY.capture(sess, angles, "" if label is None else str(label))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    rec["source"] = source
+    if source != "live frame" and last_t is not None:
+        rec["age_s"] = round(max(0.0, time.monotonic() - last_t), 1)
+    return jsonify({"ok": True, "capture": rec})
 
 
 @app.post("/api/session/stop")

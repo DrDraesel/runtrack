@@ -29,15 +29,39 @@ raises ``RuntimeError`` when it is missing.  Nothing here imports mediapipe, so
 the default MediaPipe path is unaffected by the optional dependency.
 
 Environment:
-    RUNTRACK_RTMPOSE_MODE    lightweight | balanced | performance (default: lightweight)
-    RUNTRACK_RTMPOSE_DEVICE  cpu | cuda | mps                    (default: cpu)
+    RUNTRACK_RTMPOSE_MODE         lightweight | balanced | performance (default: lightweight)
+    RUNTRACK_RTMPOSE_DEVICE       cpu | cuda | mps                    (default: cpu)
+    RUNTRACK_ORT_PROVIDER         auto | cpu | directml | cuda        (default: auto)
+                                  Only the ONNX Runtime execution provider of
+                                  the RTMPose models.  ``auto`` = DirectML when
+                                  the installed onnxruntime exposes
+                                  DmlExecutionProvider (the Windows GPU path —
+                                  no CUDA toolkit needed), else CUDA when it
+                                  exposes CUDAExecutionProvider, else CPU.  An
+                                  unavailable provider is logged and replaced
+                                  by CPU; it never raises.
+
+``backend.info`` reports what is actually running, e.g.::
+
+    {'engine': 'rtmpose', 'provider': 'DmlExecutionProvider',
+     'model': 'BodyWithFeet', 'mode': 'lightweight',
+     'provider_requested': 'auto'}
+
+so a caller (the app's /api/state, a report, a bench tool) can show the truth
+without importing onnxruntime itself.
 """
 from __future__ import annotations
 
+import collections
+import contextlib
+import logging
 import math
 import os
+import threading
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------ constants
 
@@ -59,6 +83,44 @@ def _env(name, default):
 
 MODE = _env("RUNTRACK_RTMPOSE_MODE", DEFAULT_MODE)
 DEVICE = _env("RUNTRACK_RTMPOSE_DEVICE", DEFAULT_DEVICE)
+
+# ------------------------------------------------------------ ORT providers
+# rtmlib runs every RTMPose model through onnxruntime (one InferenceSession per
+# model: the YOLOX detector and the pose network).  The execution provider picks
+# the hardware:
+#   cpu       CPUExecutionProvider — always available.
+#   directml  DmlExecutionProvider — the GPU path on Windows through DirectX 12;
+#             needs the onnxruntime-directml wheel instead of onnxruntime, no
+#             CUDA toolkit, no admin rights.  Verified on the lab RTX 5070 Ti.
+#   cuda      CUDAExecutionProvider — needs onnxruntime-gpu plus a matching CUDA
+#             and cuDNN install (not present on the lab machine).
+# The request comes from config.ORT_PROVIDER (env RUNTRACK_ORT_PROVIDER).  A
+# provider the installed onnxruntime does not expose is never fatal: it is
+# logged and the backend runs on CPU, because a slow pose beats no pose.
+PROVIDER_AUTO = "auto"
+PROVIDER_CPU = "cpu"
+PROVIDER_DIRECTML = "directml"
+PROVIDER_CUDA = "cuda"
+PROVIDERS = (PROVIDER_AUTO, PROVIDER_CPU, PROVIDER_DIRECTML, PROVIDER_CUDA)
+DEFAULT_PROVIDER = PROVIDER_AUTO
+
+EP_DML = "DmlExecutionProvider"
+EP_CUDA = "CUDAExecutionProvider"
+EP_CPU = "CPUExecutionProvider"
+PROVIDER_TO_EP = {PROVIDER_CPU: EP_CPU, PROVIDER_DIRECTML: EP_DML,
+                  PROVIDER_CUDA: EP_CUDA}
+# What "auto" prefers, in order: DirectML (no toolkit needed) before CUDA.
+AUTO_ORDER = (EP_DML, EP_CUDA)
+
+#: Result of :func:`resolve_provider`: the provider that will actually be used,
+#: the raw request, whether an explicit GPU request was degraded, and why.
+ProviderChoice = collections.namedtuple(
+    "ProviderChoice", "provider requested degraded reason")
+
+#: Most recent backend info dict built by :func:`make_backend` (None until one
+#: is built).  Lets a caller expose the active engine/provider without holding
+#: a reference to the backend.
+_LAST_INFO = None
 
 # Size of the source model's keypoint set (HALPE-26) and of the layout every
 # RunTrack consumer indexes (MediaPipe's 33-point pose).  Both tables below are
@@ -314,6 +376,162 @@ def is_available():
     return True
 
 
+# ------------------------------------------------------------ provider choice
+
+def provider_setting():
+    """The configured provider request: ``config.ORT_PROVIDER``, else the env var.
+
+    Read on every call (not cached at import) so a test, a tool or a reloaded
+    environment can change it without reloading this module.
+    """
+    try:
+        import config
+        value = getattr(config, "ORT_PROVIDER", None)
+        if value is not None:
+            return str(value)
+    except Exception:
+        pass
+    return os.environ.get("RUNTRACK_ORT_PROVIDER", DEFAULT_PROVIDER)
+
+
+def ort_available_providers():
+    """Execution providers the installed onnxruntime exposes.
+
+    ``()`` when onnxruntime is missing or broken — never raises, because a
+    caller asking about GPU support must not crash the app.
+    """
+    try:
+        import onnxruntime as ort
+    except Exception as exc:
+        log.debug("onnxruntime is not importable (%s)", exc)
+        return ()
+    try:
+        return tuple(str(p) for p in (ort.get_available_providers() or ()))
+    except Exception as exc:
+        log.debug("onnxruntime.get_available_providers() failed (%s)", exc)
+        return ()
+
+
+def resolve_provider(requested=None, available=None):
+    """Resolve a provider request to the execution provider that will be used.
+
+    ``requested`` is ``auto``/``cpu``/``directml``/``cuda``; None reads
+    ``config.ORT_PROVIDER``.  ``available`` overrides the onnxruntime query (for
+    tests).  Returns a :class:`ProviderChoice`; NEVER raises — an unknown value
+    or an unavailable provider degrades to CPU with a logged reason.
+    """
+    raw = provider_setting() if requested is None else str(requested)
+    want = (raw or "").strip().lower()
+    avail = tuple(available) if available is not None else ort_available_providers()
+    note = ""
+    if want not in PROVIDERS:
+        note = (f"unknown ORT provider {raw!r} (expected one of "
+                f"{', '.join(PROVIDERS)}) - using auto")
+        log.warning("%s", note)
+        want = DEFAULT_PROVIDER
+    if want == PROVIDER_AUTO:
+        for ep in AUTO_ORDER:
+            if ep in avail:
+                return ProviderChoice(ep, raw, False, note)
+        reason = note or (f"no GPU execution provider in this onnxruntime "
+                          f"(available: {', '.join(avail) or 'none'}) - using CPU")
+        return ProviderChoice(EP_CPU, raw, False, reason)
+    ep = PROVIDER_TO_EP[want]
+    if ep in avail:
+        return ProviderChoice(ep, raw, False, note)
+    reason = note or (f"{ep} is not available in this onnxruntime "
+                      f"(available: {', '.join(avail) or 'none'}) - using CPU")
+    log.warning("%s", reason)
+    return ProviderChoice(EP_CPU, raw, True, reason)
+
+
+def session_providers(choice):
+    """Provider list for ``ort.InferenceSession`` from a ProviderChoice/EP name.
+
+    CPU is appended after a GPU provider as the per-session safety net: an op
+    the GPU provider cannot run is then executed on CPU instead of failing the
+    whole model build.
+    """
+    ep = getattr(choice, "provider", choice)
+    if not ep or str(ep) == EP_CPU:
+        return [EP_CPU]
+    return [str(ep), EP_CPU]
+
+
+_SESSION_PATCH_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def _forced_session_providers(providers):
+    """Force every ``onnxruntime.InferenceSession`` built in this block to use
+    ``providers``.
+
+    rtmlib hard-codes its own provider table (``RTMLIB_SETTINGS``) and passes
+    ``providers=[...]`` itself; the only seam that works across rtmlib versions
+    is the session class it instantiates.  The override is a *subclass* of the
+    real class (so ``isinstance`` checks keep passing) and is installed only
+    while the models are built — a lock keeps any other thread from creating a
+    session through it, and the original class is restored in ``finally``.
+
+    Yields True when the patch is installed, False when onnxruntime cannot be
+    imported (the caller's build then fails the same way it would without us).
+    """
+    try:
+        import onnxruntime as ort
+    except Exception as exc:
+        log.debug("cannot force ORT providers, onnxruntime missing (%s)", exc)
+        yield False
+        return
+    original = ort.InferenceSession
+    wanted = [str(p) for p in providers]
+    dml = bool(wanted) and wanted[0] == EP_DML
+
+    class _Session(original):                 # noqa: N801 (mirrors the parent)
+        def __init__(self, *args, **kwargs):
+            kwargs["providers"] = list(wanted)
+            if kwargs.get("sess_options") is None and len(args) < 2:
+                try:
+                    opts = ort.SessionOptions()
+                    if dml:
+                        # DirectML EP: no memory-pattern optimisation, and
+                        # sequential execution (the EP has no stream support).
+                        opts.enable_mem_pattern = False
+                        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                    kwargs["sess_options"] = opts
+                except Exception:
+                    pass
+            super().__init__(*args, **kwargs)
+
+    patched = False
+    with _SESSION_PATCH_LOCK:
+        try:
+            ort.InferenceSession = _Session
+            patched = True
+        except Exception as exc:
+            log.debug("could not patch onnxruntime.InferenceSession (%s)", exc)
+        try:
+            yield patched
+        finally:
+            if patched:
+                ort.InferenceSession = original
+
+
+def _model_active_providers(model):
+    """Execution providers the rtmlib models' sessions actually report."""
+    seen = []
+    for attr in ("det_model", "pose_model"):
+        session = getattr(getattr(model, attr, None), "session", None)
+        try:
+            eps = list(session.get_providers())
+        except Exception:
+            continue
+        for ep in eps:
+            if ep not in seen:
+                seen.append(ep)
+    return tuple(seen)
+
+
+
 class RTMPoseBackend:
     """RTMPose body-with-feet detector behind the PoseEngine contract.
 
@@ -322,6 +540,14 @@ class RTMPoseBackend:
     ``model`` may be injected (tests, a pre-built rtmlib model); when it is
     None the rtmlib model is built on the first detection, so constructing a
     backend never downloads anything.
+
+    ``provider`` selects the ONNX Runtime execution provider
+    (``auto``/``cpu``/``directml``/``cuda``), defaulting to ``config.ORT_PROVIDER``.
+    The choice is injected into the sessions rtmlib builds and then *verified*
+    on the built session: a provider that onnxruntime does not expose (or does
+    not activate) is logged and replaced by CPU instead of raising.
+    ``backend.info`` reports the engine, the provider that is actually active
+    and the model name for /api/state-style consumers.
 
     ``roi`` is off by default.  Pass a normalized (x0, y0, x1, y1) box — or
     ``"auto"`` / True — to run on a cropped region instead of the whole frame:
@@ -335,8 +561,8 @@ class RTMPoseBackend:
     name = "rtmpose"
     model_backend = "onnxruntime"
 
-    def __init__(self, mode=None, device=None, model=None, roi=None,
-                 roi_pad=0.15, roi_min_span=0.05, min_score=0.0,
+    def __init__(self, mode=None, device=None, provider=None, model=None,
+                 roi=None, roi_pad=0.15, roi_min_span=0.05, min_score=0.0,
                  model_path=None, seg=False, num_poses=1):
         # ``model_path``/``seg``/``num_poses`` exist only so callers written for
         # PoseEngine (the app, tools/analyze_video.py) can pass the same kwargs
@@ -345,6 +571,11 @@ class RTMPoseBackend:
         # repurposed.
         self.mode = str(mode or MODE)
         self.device = str(device or DEVICE)
+        self.provider_request = provider
+        # Resolved up front so ``info`` is meaningful before the first frame;
+        # resolution only reads onnxruntime's provider list, it loads no model.
+        self._choice = resolve_provider(provider)
+        self._active_provider = None
         self.roi_pad = float(roi_pad)
         self.roi_min_span = float(roi_min_span)
         self.min_score = float(min_score)
@@ -386,6 +617,58 @@ class RTMPoseBackend:
     def label(self):
         return f"{self.name} ({self.mode}/{self.device})"
 
+    @property
+    def info(self):
+        """What is actually running: engine, execution provider and model.
+
+        ``provider`` is the execution provider the built sessions report
+        (``DmlExecutionProvider`` / ``CUDAExecutionProvider`` /
+        ``CPUExecutionProvider``); before the first frame it is the resolved
+        choice, i.e. what will be used.  ``provider_note`` carries the reason
+        whenever the request was degraded.
+        """
+        choice = self._choice
+        provider = self._active_provider or (choice.provider if choice else None)
+        out = {
+            "engine": self.name,
+            "provider": provider,
+            "model": "BodyWithFeet",
+            "mode": self.mode,
+            "provider_requested": choice.requested if choice else None,
+        }
+        if choice is not None and choice.reason:
+            out["provider_note"] = choice.reason
+        return out
+
+    def _rtmlib_device(self):
+        """The device string rtmlib's own provider table understands.
+
+        ``RUNTRACK_RTMPOSE_DEVICE``/``device`` only selects rtmlib's built-in
+        provider entry; the real execution provider is forced by us.  An
+        unknown string (e.g. ``directml``) would make rtmlib raise KeyError, so
+        it maps to ``cpu`` there.
+        """
+        name = str(self.device or "").strip().lower()
+        if name.split(":")[0] in ("cpu", "cuda", "rocm", "mps"):
+            return self.device
+        return "cpu"
+
+    def _build_model(self, cls, providers):
+        """Build rtmlib's model with ``providers`` forced into its sessions."""
+        try:
+            with _forced_session_providers(providers):
+                try:
+                    return cls(mode=self.mode, backend=self.model_backend,
+                               device=self._rtmlib_device())
+                except TypeError:
+                    # older rtmlib has no backend= kwarg (defaults to onnxruntime)
+                    return cls(mode=self.mode, device=self._rtmlib_device())
+        except Exception as exc:
+            raise RuntimeError(
+                f"could not create rtmlib.BodyWithFeet(mode={self.mode!r}, "
+                f"device={self.device!r}, providers={list(providers)}): {exc}"
+            ) from exc
+
     def _ensure_model(self):
         if self._model is not None:
             return self._model
@@ -396,18 +679,29 @@ class RTMPoseBackend:
                 "rtmlib is installed but exposes no BodyWithFeet class — "
                 "install a newer rtmlib (pip install -U rtmlib)"
             )
-        try:
-            try:
-                self._model = cls(mode=self.mode, backend=self.model_backend,
-                                  device=self.device)
-            except TypeError:
-                # older rtmlib has no backend= kwarg (it defaults to onnxruntime)
-                self._model = cls(mode=self.mode, device=self.device)
-        except Exception as exc:
-            raise RuntimeError(
-                f"could not create rtmlib.BodyWithFeet(mode={self.mode!r}, "
-                f"device={self.device!r}): {exc}"
-            ) from exc
+        choice = self._choice or resolve_provider(self.provider_request)
+        self._choice = choice
+        model = self._build_model(cls, session_providers(choice))
+        active = _model_active_providers(model)
+        if choice.provider != EP_CPU and active and choice.provider not in active:
+            # onnxruntime accepted the session but did not activate the GPU
+            # provider (e.g. the EP failed to initialise). Rebuild on CPU rather
+            # than leave a session that silently runs elsewhere.
+            reason = (f"{choice.provider} was not active in the built session "
+                      f"(active: {', '.join(active)}) - using CPU")
+            log.warning("%s", reason)
+            self._choice = ProviderChoice(EP_CPU, choice.requested, True, reason)
+            model = self._build_model(cls, [EP_CPU])
+            active = _model_active_providers(model)
+        self._model = model
+        if active:
+            self._active_provider = (self._choice.provider
+                                     if self._choice.provider in active
+                                     else active[0])
+        else:
+            self._active_provider = self._choice.provider
+        log.info("RTMPose ready: mode=%s provider=%s (requested %r)",
+                 self.mode, self._active_provider, self._choice.requested)
         return self._model
 
     def _infer(self, image):
@@ -544,6 +838,7 @@ class RTMPoseBackend:
     def close(self):
         """Drop the model; rtmlib sessions need no explicit shutdown."""
         self._model = None
+        self._active_provider = None
 
     def __repr__(self):
         return (f"RTMPoseBackend(mode={self.mode!r}, device={self.device!r}, "
@@ -555,9 +850,18 @@ def make_backend(which=None, **kwargs):
 
     ``which`` defaults to ``config.POSE_BACKEND`` (env ``RUNTRACK_POSE_BACKEND``,
     default ``"mediapipe"``).  Extra kwargs go to the backend constructor, e.g.
-    ``make_backend("rtmpose", roi="auto")`` or
+    ``make_backend("rtmpose", roi="auto", provider="directml")`` or
     ``make_backend("mediapipe", model_path=path)``.
+
+    Every returned backend carries an ``info`` dict (engine / provider / model)
+    and is remembered by :func:`backend_info`, so callers that only keep the
+    engine object — the app's capture loop, /api/state, the bench tools — can
+    report what is actually running without knowing the backend type.  A
+    ``provider=`` kwarg is accepted (and ignored) for MediaPipe, because an
+    ONNX Runtime provider has no meaning there.
     """
+    global _LAST_INFO
+    model_path = kwargs.get("model_path") or _config_model_path()
     if which is None:
         which = "mediapipe"
         try:
@@ -567,9 +871,65 @@ def make_backend(which=None, **kwargs):
             pass
     name = str(which).strip().lower()
     if name in ("rtmpose", "rtm", "rtmlib"):
-        return RTMPoseBackend(**kwargs)
-    if name in ("mediapipe", "mp"):
+        backend = RTMPoseBackend(**kwargs)
+        info = dict(backend.info)
+    elif name in ("mediapipe", "mp"):
+        if "provider" in kwargs:
+            log.debug("ignoring provider=%r: MediaPipe does not use ONNX Runtime",
+                      kwargs.pop("provider"))
         from pose_engine import PoseEngine      # lazy: mediapipe is the default
-        return PoseEngine(**kwargs)
-    raise ValueError(f"unknown pose backend {which!r} "
-                     "(expected 'mediapipe' or 'rtmpose')")
+        backend = PoseEngine(**kwargs)
+        info = _attach_mediapipe_info(backend, model_path)
+    else:
+        raise ValueError(f"unknown pose backend {which!r} "
+                         "(expected 'mediapipe' or 'rtmpose')")
+    _LAST_INFO = info
+    return backend
+
+
+def _config_model_path():
+    """``config.MODEL_PATH`` as a str, or '' when config is unavailable."""
+    try:
+        import config
+        return str(getattr(config, "MODEL_PATH", "") or "")
+    except Exception:
+        return ""
+
+
+def _attach_mediapipe_info(engine, model_path=None):
+    """Give a PoseEngine instance the same ``info`` contract as RTMPose.
+
+    The engine class lives in pose_engine.py and stays untouched: the attribute
+    is set on the instance.  MediaPipe runs its own inference runtime here, not
+    ONNX Runtime, so ``provider`` names the MediaPipe runtime — never a
+    Dml/Cuda execution provider.
+    """
+    stem = "pose_landmarker"
+    try:
+        base = os.path.basename(str(model_path or _config_model_path()))
+        if base:
+            stem = base.split(".")[0] or stem
+    except Exception:
+        pass
+    info = {"engine": "mediapipe", "provider": "mediapipe", "model": stem,
+            "runtime": "mediapipe.tasks"}
+    try:
+        engine.info = info
+    except Exception:
+        pass
+    return info
+
+
+def backend_info(backend=None):
+    """The ``info`` dict of ``backend``, or of the most recently built backend.
+
+    Always returns a fresh dict (mutating it never changes a backend's state);
+    ``{}`` when nothing has been built and no backend was given.
+    """
+    if backend is not None:
+        info = getattr(backend, "info", None)
+        if isinstance(info, dict):
+            return dict(info)
+        name = getattr(backend, "name", None) or type(backend).__name__
+        return {"engine": str(name), "provider": None, "model": None}
+    return dict(_LAST_INFO or {})
