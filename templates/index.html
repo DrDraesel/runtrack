@@ -144,8 +144,11 @@
   .chatmsg.sys { border-color:#6b5a2f; }
   .chatmsg.sys .txt { color:#ffd479; }
 </style>
+<link rel="stylesheet" href="/static/lab-ui/tokens.css">
+<link rel="stylesheet" href="/static/lab-ui/components.css">
+<link rel="stylesheet" href="/static/lab-ui/lab-runtrack.css">
 </head>
-<body>
+<body class="lab-bg">
 <h1>RunTrack — biomechanics lab (running · cycling)</h1>
 <div class="bar">
   <span class="muted">live joint tracking · slow-motion video review · local only</span>
@@ -666,6 +669,12 @@ let lastState = null, lastPlaneWarn = "", lastCad = null, lastDisc = "running";
 let allSessions = [], editSid = null, editPid = null;
 
 function $(id) { return document.getElementById(id); }
+/* Escape server/user text before it is interpolated into innerHTML. */
+function esc(v) {
+  return String(v === null || v === undefined ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 function fmt(v, unit, d) {
   if (v === null || v === undefined || Number.isNaN(v)) return "–";
   return (d === undefined ? Math.round(v) : v.toFixed(d)) + (unit || "");
@@ -1467,14 +1476,23 @@ async function startSession() {
     }
     lastState = st;
   }
-  const d = await jpost("/api/session/start", {
+  const startBody = {
     name, phone, view_plane: planePlanned,
     discipline: disciplinePlanned, bike_type: bikeTypePlanned,
     weight_kg: $("pweight").value, height_cm: $("pheight").value,
     speed_kmh: $("pspeed").value, duration_s: $("pdur").value,
     cd_est: $("pcd") ? $("pcd").value : null,
     saddle_cm: $("psaddle") ? $("psaddle").value : null,
-  });
+  };
+  let d = await jpost("/api/session/start", startBody);
+  // The rig's plane check can disagree with the selected plane. It is a
+  // heuristic, so let the operator record anyway — the mismatch is then
+  // written into the session summary (plane_mismatch_confirmed).
+  if (!d.ok && /^camera plane mismatch/.test(d.error || "")
+      && window.confirm(d.error + "\n\nRecord this session anyway?")) {
+    startBody.confirm_plane_mismatch = true;
+    d = await jpost("/api/session/start", startBody);
+  }
   if (!d.ok) {
     $("startErr").textContent = "Could not start: " + d.error;
     banner("Could not start: " + d.error, "err");
@@ -1506,10 +1524,10 @@ async function refreshSessions() {
     const rep = s.status === "complete" || s.status === "incomplete"
       ? `<a href="/report/${s.id}/" target="_blank">open</a> <a href="/report/${s.id}/" target="_blank" title="print / save as PDF">🖨</a>` : "–";
     const riskCls = s.risk_level === "Low" ? "ok" : (s.risk_level === "High" ? "bad" : "warn");
-    tr.innerHTML = `<td>${s.id}</td><td>${s.patient_name || "?"}<br><span class="muted">${s.patient_phone || ""}</span></td>` +
-      `<td>${s.started_ts || ""}</td><td>${s.view_plane || ""}</td><td>${fmt(s.cadence_spm, "", 0)}</td>` +
-      `<td>${fmt(s.form_score, "", 0)}</td><td class="${riskCls}">${s.risk_level || "–"}</td>` +
-      `<td>${s.status}</td><td>${rep}</td>` +
+    tr.innerHTML = `<td>${s.id}</td><td>${esc(s.patient_name) || "?"}<br><span class="muted">${esc(s.patient_phone)}</span></td>` +
+      `<td>${esc(s.started_ts)}</td><td>${esc(s.view_plane)}</td><td>${fmt(s.cadence_spm, "", 0)}</td>` +
+      `<td>${fmt(s.form_score, "", 0)}</td><td class="${riskCls}">${esc(s.risk_level) || "–"}</td>` +
+      `<td>${esc(s.status)}</td><td>${rep}</td>` +
       `<td><button class="ghost" style="padding:2px 8px;font-size:11px" onclick="editSession(${s.id})">✎</button></td>`;
     tb.appendChild(tr);
   }
@@ -1531,7 +1549,7 @@ async function refreshPatients() {
     o.textContent = p.name + " · " + p.phone + " (" + p.n_sessions + " sessions)";
     sel.appendChild(o);
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${p.id}</td><td>${p.name}</td><td>${p.phone}</td><td>${p.n_sessions}</td>` +
+    tr.innerHTML = `<td>${p.id}</td><td>${esc(p.name)}</td><td>${esc(p.phone)}</td><td>${p.n_sessions}</td>` +
       `<td style="white-space:nowrap">` +
       `<button class="ghost" style="padding:2px 8px;font-size:11px" onclick="openPatient(${p.id})">history</button> ` +
       `<button class="ghost" style="padding:2px 8px;font-size:11px" onclick="editPatient(${p.id})">✎ edit</button></td>`;
@@ -1556,10 +1574,10 @@ async function loadHistory() {
   d.sessions.forEach((s) => {
     const tr = document.createElement("tr");
     const riskCls = s.risk_level === "Low" ? "ok" : (s.risk_level === "High" ? "bad" : "warn");
-    tr.innerHTML = `<td>${s.id}</td><td>${(s.started_ts || "").slice(0, 16)}</td>` +
-      `<td>${s.view_plane || ""}</td><td>${fmt(s.cadence_spm, "", 0)}</td>` +
+    tr.innerHTML = `<td>${s.id}</td><td>${esc((s.started_ts || "").slice(0, 16))}</td>` +
+      `<td>${esc(s.view_plane)}</td><td>${fmt(s.cadence_spm, "", 0)}</td>` +
       `<td>${fmt(s.form_score, "", 0)}</td><td>${fmt(s.symmetry_mean_pct, "", 0)}</td>` +
-      `<td class="${riskCls}">${s.risk_level || "–"}</td>` +
+      `<td class="${riskCls}">${esc(s.risk_level) || "–"}</td>` +
       `<td><button class="ghost" style="padding:2px 7px;font-size:11px" onclick="pick('${s.id}','a')">A</button> ` +
       `<button class="ghost" style="padding:2px 7px;font-size:11px" onclick="pick('${s.id}','b')">B</button></td>` +
       `<td style="white-space:nowrap"><a href="/report/${s.id}/" target="_blank">open</a> ` +
@@ -1596,7 +1614,7 @@ async function runCompare() {
     const cls = row.verdict === "Improved" ? "ok" : (row.verdict === "Regressed" ? "bad" : "warn");
     const dTxt = row.delta === null ? "–" : signed(row.delta, "", 2);
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${row.label}</td><td>${fmt(row.baseline, "", 2)}</td>` +
+    tr.innerHTML = `<td>${esc(row.label)}</td><td>${fmt(row.baseline, "", 2)}</td>` +
       `<td>${fmt(row.followup, "", 2)}</td><td class="${cls}">${dTxt}</td>` +
       `<td><span class="badge ${cls}">${row.verdict}</span></td>`;
     tb.appendChild(tr);
@@ -2044,11 +2062,11 @@ function updateRig(rig) {
     if (v.framing && v.framing.height_frac)
       bits.push("fills " + Math.round(v.framing.height_frac * 100) + "%");
     const warn = (v.warnings || []).map(function (w) {
-      return '<div style="color:#ffb74d">• ' + w + '</div>';
+      return '<div style="color:#ffb74d">• ' + esc(w) + '</div>';
     }).join("");
     return '<div style="margin-bottom:6px"><b style="color:' + (ok ? "#5ad18a" : "#ff8a65")
-      + '">' + (ok ? "OK" : "FIX") + '</b> ' + (names[k] || ("view " + k))
-      + ' (' + (v.plane || "?") + ')'
+      + '">' + (ok ? "OK" : "FIX") + '</b> ' + esc(names[k] || ("view " + k))
+      + ' (' + esc(v.plane || "?") + ')'
       + (bits.length ? '<div class="muted">' + bits.join(" · ") + '</div>' : "")
       + warn + '</div>';
   }).join("");

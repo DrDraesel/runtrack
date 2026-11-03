@@ -1,0 +1,131 @@
+/* RunTrack bridge — maps the existing dark UI onto the lab design system.
+   Loaded AFTER the inline <style> so equal-specificity rules win.
+   Only colour / type / radius / elevation change; layout is untouched. */
+
+:root {
+  color-scheme: light;
+  --rt-bg: #F7F0E7;
+  --rt-card: #FFFFFF;
+  --rt-soft: #FBF7F1;
+  --rt-line: #E9E2D8;
+  --rt-ink: #1A1A1A;
+  --rt-ink2: #6E6961;
+  --rt-ink3: #9C968B;
+  --rt-accent: #E8541F;
+  --rt-accent-100: #FBE2D5;
+  --rt-ok: #1F7A4B;
+  --rt-ok-bg: #E4F4E8;
+  --rt-warn: #9A5B00;
+  --rt-warn-bg: #FBEEDA;
+  --rt-bad: #C8341C;
+  --rt-bad-bg: #FBE4DF;
+}
+
+body {
+  background: radial-gradient(1200px 620px at 50% -12%, #FBE6D8 0%, #F7F0E7 56%, #F4EDE4 100%) fixed;
+  color: var(--rt-ink);
+  font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.015em; color: var(--rt-ink); }
+h2 {
+  font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: 0;
+  color: var(--rt-ink); margin: 0 0 10px;
+}
+.muted { color: var(--rt-ink3); }
+a { color: var(--rt-accent); }
+
+/* cards */
+.card {
+  background: var(--rt-card); border: 1px solid var(--rt-line);
+  border-radius: 18px; box-shadow: 0 1px 2px rgba(26,26,26,.04), 0 8px 24px rgba(26,26,26,.05);
+  padding: 18px; margin-bottom: 16px;
+}
+#cameraCard, #jointStudyCard { background: var(--rt-card); }
+
+/* status pills / chips / badges */
+.pill, .chip, .badge {
+  border-radius: 999px; border: 1px solid var(--rt-line);
+  background: var(--rt-soft); color: var(--rt-ink2); font-weight: 500;
+}
+.pill.ok, .badge.ok, .chip.ok { background: var(--rt-ok-bg); color: var(--rt-ok); border-color: transparent; }
+.pill.warn, .badge.warn, .chip.warn { background: var(--rt-warn-bg); color: var(--rt-warn); border-color: transparent; }
+.pill.bad, .badge.bad, .chip.bad { background: var(--rt-bad-bg); color: var(--rt-bad); border-color: transparent; }
+
+/* controls */
+label { color: var(--rt-ink2); font-size: 11.5px; font-weight: 500; }
+input, select, textarea {
+  background: #fff; color: var(--rt-ink); border: 1px solid #D9D1C5;
+  border-radius: 12px; min-height: 36px;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--rt-accent); box-shadow: 0 0 0 3px rgba(232,84,31,.20);
+}
+button {
+  background: #fff; color: var(--rt-ink); border: 1px solid #D9D1C5;
+  border-radius: 12px; padding: 9px 14px; font-weight: 500;
+}
+button:hover { background: var(--rt-soft); border-color: var(--rt-ink3); }
+button.active, button.big.active { background: var(--rt-accent); border-color: var(--rt-accent); color: #fff; }
+button.ghost { background: transparent; border-color: transparent; color: var(--rt-ink2); }
+button.ghost:hover { background: #F1EBE2; color: var(--rt-ink); }
+button.danger { background: var(--rt-bad-bg); border-color: transparent; color: var(--rt-bad); }
+button.big { width: 100%; padding: 12px; font-size: 15px; }
+button:disabled { opacity: .45; }
+
+/* metric tiles */
+.m {
+  background: var(--rt-soft); border: 1px solid var(--rt-line);
+  border-radius: 12px; padding: 9px 11px;
+}
+.m .k { font-size: 10px; color: var(--rt-ink3); letter-spacing: .04em; }
+.m .v { font-size: 18px; font-weight: 600; color: var(--rt-ink); font-variant-numeric: tabular-nums; }
+.m.na .v { color: var(--rt-warn); font-size: 11.5px; font-weight: 500; }
+
+/* big numbers */
+.bignums .bn { background: var(--rt-soft); border-color: var(--rt-line); border-radius: 14px; }
+.bignums .bn .v, .bignums .v { font-variant-numeric: tabular-nums; }
+.bignums .bn .u, .bignums .u { color: var(--rt-ink3); }
+
+/* tables */
+table { font-size: 12.5px; }
+th { background: var(--rt-soft); color: var(--rt-ink2); font-weight: 500; font-size: 11px; border-bottom: 1px solid var(--rt-line); }
+th, td { border-bottom: 1px solid var(--rt-line); padding: 9px 10px; }
+tr:hover td { background: #FDF9F3; }
+.datagrid td, .datagrid th { border-color: var(--rt-line); }
+
+/* camera rows */
+.camrow { border-bottom: 1px solid var(--rt-line); }
+.camrow .nm { color: var(--rt-ink); }
+.camdot { width: 8px; height: 8px; border-radius: 50%; }
+.camfps { color: var(--rt-ink3); font-variant-numeric: tabular-nums; }
+
+/* segmented tabs */
+.tabs { background: #ECE6DD; border-radius: 999px; padding: 4px; }
+.tab { border: 0; background: transparent; color: var(--rt-ink2); border-radius: 999px; }
+.tab.active { background: #fff; color: var(--rt-ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+
+/* chat */
+.chatmsg { background: #fff; border: 1px solid var(--rt-line); border-radius: 14px; }
+.chatmsg .who { color: var(--rt-ink3); font-size: 10.5px; letter-spacing: .06em; }
+.chatmsg.user { border-color: var(--rt-accent-100); background: #FDF1EA; }
+.chatmsg.user .who { color: var(--rt-accent); }
+.chatmsg.assistant { border-color: #D8EBDD; background: #F3FAF5; }
+.chatmsg.sys { border-color: #F0DFC0; background: var(--rt-warn-bg); }
+.chatmsg.sys .txt { color: var(--rt-warn); }
+
+/* banners / errors */
+.banner, #startErr, .playbar, .audiobar {
+  background: var(--rt-soft); border: 1px solid var(--rt-line); border-radius: 12px;
+}
+#startErr { color: var(--rt-bad); }
+
+/* video stays dark — it is a video surface */
+#feed, #feed2, #feed3 { border: 1px solid #1F1F1F; border-radius: 14px; background: #0A0A0A; }
+.countdown { color: #FFD479; }
+
+/* charts */
+.chart, #ch_joints, canvas { background: transparent; }
+
+/* split / plane rows */
+.planeRow, .playrow, .split, .livegrid { color: var(--rt-ink2); }
+.histsel { background: var(--rt-accent-100); }
