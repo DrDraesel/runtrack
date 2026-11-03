@@ -161,6 +161,12 @@ class TestCyclingReport(unittest.TestCase):
 
     def seed(self, rows, bike_type="tt", name="Cyclist"):
         summary = full_summary(rows, bike_type=bike_type)
+        # The synthetic rows are not a real side-on recording; declare the
+        # verified side view the gate requires so this fixture tests the report
+        # sections rather than the plane gate (pinned in test_plane_gate.py).
+        summary.setdefault("data_quality", {})["camera_orientation"] = {
+            "guess": "sagittal", "guess_label": "sagittal (side)",
+            "nose_offset_ratio": 1.42, "samples": 600, "plane_match": True}
         pid = self.store.upsert_patient(name, "000")
         sid = self.store.create_session(
             pid, {"weight_kg": 75, "height_cm": 178, "speed_kmh": 40},

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import collections
+import html
 import json
 import re
 import threading
@@ -47,6 +48,20 @@ from side_identity import SideIdentity
 
 app = Flask(__name__)
 STORE = Store(config.DB_PATH)
+
+
+def _reconcile_orphan_sessions(store=None) -> list:
+    """Close rows a previous process left ``running`` (startup reconciliation).
+
+    Never raises: a broken or locked DB must not stop the app from starting.
+    """
+    try:
+        return (store or STORE).reconcile_orphans()
+    except Exception:
+        return []
+
+
+ORPHANED_SESSIONS = _reconcile_orphan_sessions()
 
 
 # ------------------------------------------------------------------ state --
@@ -242,6 +257,13 @@ def _finalize(reason="complete"):
         source3_label = sess.get("source3_label") or "none"
         source1_label = sess.get("source1_label") or "none"
         depth_acc = sess.get("depth_acc")
+        # views the watchdog dropped, and an operator-confirmed plane mismatch,
+        # must travel with the summary instead of living only in the live state
+        warn2 = L.warn2
+        warn3 = L.warn3
+        plane_confirmed = bool(sess.get("plane_mismatch_confirmed"))
+        rig_plane_guess = sess.get("rig_plane_guess")
+        last_error = L.error
     status = "complete" if reason == "complete" else "incomplete"
     try:
         if discipline == "running":
@@ -379,6 +401,22 @@ def _finalize(reason="complete"):
         if reason == "stopped":
             summary["note"] = "session stopped early by operator"
             status = "complete" if elapsed >= 5 else "incomplete"
+        elif reason == "capture_error":
+            # The capture loop died on an exception. The row must not stay
+            # 'running' (the DB then shows a session that never ends): close it
+            # as incomplete with the error, mirroring camera_stalled.
+            detail = str(last_error or "unknown capture error")
+            note = (f"recording ended with a capture error: {detail}. Metrics "
+                    f"describe only the frames recorded before it ({len(rows)} "
+                    f"frames, {elapsed:.1f} s).")
+            dq = summary.get("data_quality")
+            if not isinstance(dq, dict):
+                dq = summary["data_quality"] = {}
+            dq["capture_error"] = True
+            dq["capture_error_detail"] = detail
+            summary["note"] = note
+            summary.setdefault("labels", []).append(note)
+            status = "incomplete"
         elif reason == "camera_stalled":
             # The primary camera went silent mid-recording.  Say it in the
             # summary in plain English instead of presenting a short session
@@ -399,6 +437,42 @@ def _finalize(reason="complete"):
             summary["note"] = note
             summary.setdefault("labels", []).append(note)
             status = "incomplete"
+        # ---- operator-confirmed plane mismatch -----------------------------
+        if plane_confirmed:
+            summary["plane_mismatch_confirmed"] = True
+            summary["plane_guess"] = rig_plane_guess
+            note = ("the operator confirmed a camera-plane mismatch at session "
+                    f"start: the live camera looked {rig_plane_guess}, the "
+                    f"session was recorded as {plane}")
+            summary["note"] = (f"{summary['note']} {note}" if summary.get("note")
+                               else note)
+            summary.setdefault("labels", []).append(note)
+        # ---- views the watchdog dropped before this session ended ----------
+        dropped = []
+        for view, warn, label in (("second", warn2, source2_label),
+                                  ("third", warn3, source3_label)):
+            if warn:
+                dropped.append({"view": view,
+                                "source": label if label not in (None, "", "none") else None,
+                                "warning": str(warn)})
+        if dropped:
+            dq = summary.get("data_quality")
+            if not isinstance(dq, dict):
+                dq = summary["data_quality"] = {}
+            dq["dropped_views"] = dropped
+            dq["second_view_dropped"] = any(d["view"] == "second" for d in dropped)
+            dq["third_view_dropped"] = any(d["view"] == "third" for d in dropped)
+            if warn2:
+                dq["warn2"] = str(warn2)
+            if warn3:
+                dq["warn3"] = str(warn3)
+            note = ("recording covers fewer views than the rig: " + "; ".join(
+                f"{d['view']} view"
+                + (f" ({d['source']})" if d["source"] else "")
+                + f" was dropped — {d['warning']}" for d in dropped))
+            summary["note"] = (f"{summary['note']} {note}" if summary.get("note")
+                               else note)
+            summary.setdefault("labels", []).append(note)
         STORE.save_csv(sid, rows)
         STORE.finish_session(sid, summary.get("duration_s", elapsed), len(rows),
                              summary, status=status)
@@ -1133,6 +1207,12 @@ def _loop(src: dict):
     except Exception as e:
         with L.lock:
             L.error = f"capture error: {e}"
+        # A session must never be left 'running' in the DB because the loop
+        # died: close it as capture_error, exactly like the camera-stall path.
+        try:
+            _finalize("capture_error")
+        except Exception:
+            pass
     finally:
         # extra views: stop the owner threads FIRST (they release their own
         # capture); a device stuck in read() must not delay shutdown beyond a
@@ -1685,6 +1765,23 @@ def api_session_start():
     plane = str(data.get("view_plane") or config.DEFAULT_VIEW_PLANE).lower()
     if plane not in config.VIEW_PLANES:
         plane = config.DEFAULT_VIEW_PLANE
+    # ---- camera-plane gate: the live rig can contradict the requested plane
+    with L.lock:
+        rig_primary = dict((L.rig or {}).get("1") or {})
+    rig_guess = str(rig_primary.get("plane_guess") or "").lower()
+    raw_confirm = data.get("confirm_plane_mismatch")
+    confirm_mismatch = (raw_confirm is True
+                        or str(raw_confirm).strip().lower() in ("1", "true", "yes"))
+    if (rig_guess in ("sagittal", "frontal") and rig_guess != plane
+            and not confirm_mismatch):
+        return jsonify({
+            "ok": False,
+            "error": (f"camera plane mismatch: the open camera looks {rig_guess} "
+                      f"at the runner, but this session was requested as {plane}. "
+                      "Re-aim the camera or pick the matching plane; resend with "
+                      "confirm_plane_mismatch: true to record it anyway."),
+            "plane_guess": rig_guess, "view_plane": plane,
+        }), 400
     discipline = str(data.get("discipline") or config.DEFAULT_DISCIPLINE).lower()
     if discipline not in config.DISCIPLINES:
         discipline = config.DEFAULT_DISCIPLINE
@@ -1711,6 +1808,12 @@ def api_session_start():
                      "finalizing": False, "snap_count": 0, "last_snap": -1e9,
                      "view_plane": plane, "discipline": discipline,
                      "bike_type": bike_type, "latch": latch,
+                     # the operator overrode a live plane mismatch: keep it on
+                     # the session so finalize can record it in the summary
+                     "plane_mismatch_confirmed": bool(
+                         confirm_mismatch and rig_guess in ("sagittal", "frontal")
+                         and rig_guess != plane),
+                     "rig_plane_guess": rig_guess or None,
                      # periodic stills: prove the report always has pictures
                      "stills": GA.StillCollector(),
                      "aspect": L.aspect,
@@ -2088,7 +2191,8 @@ def api_coach(sid: int):
         STORE.save_json(sid, "coach.json", {
             "model": ai_backend.active_model(), "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "text": text, "images_used": len(imgs)})
-        return jsonify({"ok": True, "text": text})
+        return jsonify({"ok": True, "text": text,
+                        "text_html": html.escape(str(text)).replace("\n", "<br>")})
     except Exception as e:
         return jsonify({"ok": False, "error": f"AI request failed: {e}"}), 502
 

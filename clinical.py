@@ -118,11 +118,12 @@ _BANNED = re.compile(
 )
 _CONDITIONS = re.compile(
     r"\b("
-    r"patellofemoral\s+pain(?:\s+syndrome)?|"
+    r"patellofemoral\s+pain(?:\s+syndrome)?|runner'?s\s+knee|"
     r"iliotibial\s+band\s+syndrome|ITB\s+syndrome|ITBS|"
+    r"greater\s+trochanteric\s+pain(?:\s+syndrome)?|GTPS|"
     r"medial\s+tibial\s+stress\s+syndrome|MTSS|shin\s+splints?|"
     r"Achilles\s+tendinopathy|plantar\s+fasci(?:itis|opathy)|"
-    r"stress\s+fracture|fracture|hamstring\s+strain|"
+    r"stress\s+(?:reaction|fracture)|fracture|hamstring\s+strain|"
     r"osteoarthritis|tendinopathy|compartment\s+syndrome|"
     r"cauda\s+equina|infection|tumou?r|"
     r"patellar\s+tendinopathy|gluteal\s+tendinopathy|"
@@ -133,6 +134,13 @@ _CONDITIONS = re.compile(
 _NEGATION = re.compile(
     r"\b(not|no|never|cannot|can't|without|does not|do not|isn't|aren't|"
     r"must not|should not|unable to|rather than|instead of|free of)\b",
+    re.IGNORECASE,
+)
+# A negation only governs its own clause. This splits the +/-40 character
+# window so "no swelling, and the runner has patellar tendinopathy" cannot
+# borrow the "no" from the previous clause.
+_CLAUSE_BREAK = re.compile(
+    r"[,;:.!?]|\b(?:and|but|while|although|though|whereas|yet)\b",
     re.IGNORECASE,
 )
 
@@ -422,6 +430,23 @@ def _sentences(text: str):
     return re.split(r"(?<=[.!?])\s+", str(text or ""))
 
 
+def _negated(sentence: str, match) -> bool:
+    """True when the flagged phrase sits inside a negated clause.
+
+    The old guard skipped a sentence when any negation appeared anywhere in
+    its first 60 characters, so "no swelling, and the runner has patellar
+    tendinopathy" passed as a negated statement.  Read only the clause that
+    holds the match (a comma/conjunction ends the negation's scope), plus a
+    short forward window for genuine post-modifiers ("a diagnosis cannot be
+    made", "X is not present").
+    """
+    before = sentence[max(0, match.start() - 40):match.start()]
+    if _NEGATION.search(_CLAUSE_BREAK.split(before)[-1]):
+        return True
+    after = sentence[match.end():match.end() + 40]
+    return bool(_NEGATION.search(_CLAUSE_BREAK.split(after)[0]))
+
+
 def guard_text(text: str) -> list:
     """Return human-readable issues for unsupported clinical claims."""
     issues = []
@@ -429,8 +454,7 @@ def guard_text(text: str) -> list:
         match = _BANNED.search(sentence) or _CONDITIONS.search(sentence)
         if not match:
             continue
-        prefix = sentence[:match.start()]
-        if _NEGATION.search(prefix) or _NEGATION.search(sentence[:60]):
+        if _negated(sentence, match):
             continue
         issues.append(f"banned clinical claim: '{match.group(0)}' in: {sentence[:180]}")
     return issues

@@ -720,13 +720,19 @@ def build(sid: int, store: Store) -> str:
 <div id="coachBox" class="coach noprint">{coach_text or 'No review yet. Press the button below (needs the RunTrack app running; the local model can take 1–3 minutes).'}</div>
 <button class="noprint" onclick="runCoach()" style="margin-top:8px">Run local AI form review</button>
 <script>
+function escHtml(v) {{
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}}
 async function runCoach() {{
   const b = document.getElementById('coachBox');
   b.textContent = 'Running local model — this can take 1-3 minutes...';
   try {{
     const r = await fetch('/api/coach/{sid}', {{method: 'POST'}});
     const d = await r.json();
-    b.innerHTML = d.ok ? d.text.replace(/\\n/g, '<br>') : ('Review failed: ' + d.error);
+    b.innerHTML = d.ok
+      ? (d.text_html || escHtml(d.text).split(String.fromCharCode(10)).join('<br>'))
+      : ('Review failed: ' + escHtml(d.error));
   }} catch (e) {{
     b.textContent = 'Review failed (open this report from the RunTrack app): ' + e;
   }}
@@ -1047,7 +1053,8 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
         ("Frames", _fmt(sess.get("frames"))),
         ("Cadence", _fmt(summary.get("cadence_spm"), " spm")),
         ("Steps (est.)", _fmt(summary.get("strike_count"))),
-        ("Vertical osc.", _fmt(summary.get("vertical_osc_cm"), " cm")),
+        ("Vertical osc." + (" (est.)" if summary.get("vertical_osc_cm") is not None else ""),
+         _fmt(summary.get("vertical_osc_cm"), " cm")),
         ("Power est.", _fmt(summary.get("power_est_watts"), " W")),
         ("Power / kg", _fmt(summary.get("power_per_kg_watts"), " W/kg")),
         ("Metrics in band", _fmt(summary.get("form_index"), " %")),
@@ -1060,9 +1067,9 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
     if sv3:
         cards.append(("Third-view score", _fmt(sv3.get("form_score"), " / 100")))
     if summary.get("step_length_m"):
-        cards.append(("Step length", _fmt(summary.get("step_length_m"), " m")))
+        cards.append(("Step length (est.)", _fmt(summary.get("step_length_m"), " m")))
     if summary.get("stride_length_m"):
-        cards.append(("Stride length", _fmt(summary.get("stride_length_m"), " m")))
+        cards.append(("Stride length (est.)", _fmt(summary.get("stride_length_m"), " m")))
     if summary.get("touchdown_shin_deg"):
         cards.append(("Touchdown shin", _fmt(_dval(summary.get("touchdown_shin_deg")), " °")))
     if summary.get("overstride_leg_frac"):
@@ -1091,9 +1098,6 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
             cards.append(("Torso angle", _fmt(tp, " °")))
         if aero.get("fa_m2_median"):
             cards.append(("Frontal area", _fmt(aero.get("fa_m2_median"), " m²")))
-    card_html = "".join(
-        f'<div class="card"><div class="k">{esc(k)}</div><div class="v">{v}</div></div>'
-        for k, v in cards)
 
     dq = summary.get("data_quality") or {}
     orient = dq.get("camera_orientation") or {}
@@ -1114,16 +1118,95 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
                 orient["plane_match"] = None
         except Exception:
             orient = {}
-    plane_warn = ""
+    # ---- plane gate ------------------------------------------------------
+    # The old report printed a red warning and then rendered the form score,
+    # risk level, joint-angle table and gait metrics anyway.  An unverified
+    # plane makes every plane-specific number invalid, so it blocks them.
+    gate_reason = None
     if isinstance(orient, dict) and orient.get("plane_match") is False:
-        plane_warn = (
-            '<p class="caveat"><b>Camera-plane check failed.</b> '
-            f'The selected view is <b>{esc(plane)}</b>, but the footage looks '
-            f'<b>{esc(orient.get("guess_label") or orient.get("guess"))}</b> '
-            f'(median nose offset {esc(orient.get("nose_offset_ratio"))} shoulder widths). '
-            'Plane-specific metrics in this report are invalid. Re-record or re-import '
-            'with the camera side-on for sagittal analysis (and rear/front for frontal '
-            'analysis) before using these values.</p>')
+        gate_reason = "mismatch"
+    elif isinstance(orient, dict) and str(orient.get("guess") or "").lower() == "ambiguous":
+        gate_reason = "ambiguous"
+    elif not orient and str(plane).lower() == "sagittal":
+        gate_reason = "missing"
+    blocked = gate_reason is not None
+    plane_block = ""
+    if blocked:
+        ratio = orient.get("nose_offset_ratio") if isinstance(orient, dict) else None
+        ratio_txt = ((f"{float(ratio):.2f} shoulder widths (frontal below 0.25, "
+                      "sagittal above 0.60; 0.25-0.60 is ambiguous)")
+                     if isinstance(ratio, (int, float)) else
+                     "not measurable — the stored rows carry no usable nose/shoulder frames")
+        if gate_reason == "mismatch":
+            why = (f"The session is labelled <b>{esc(plane)}</b>, but the stored "
+                   f"camera-orientation check says the footage looks "
+                   f"<b>{esc(orient.get('guess_label') or orient.get('guess'))}</b>. ")
+        elif gate_reason == "ambiguous":
+            why = ("The camera sits between the two planes: the nose offset is in the "
+                   "ambiguous band, so neither sagittal nor frontal metrics can be "
+                   "trusted. ")
+        else:
+            why = ("No camera-orientation check was stored for this sagittal-labelled "
+                   "session, and it could not be recomputed from metrics.csv. ")
+        plane_block = f"""
+<div class="blockbox" id="plane-block">
+<h2>Not scoreable — camera plane not verified</h2>
+<p>{why}Measured nose/shoulder offset: <b>{esc(ratio_txt)}</b>.</p>
+<p><b>What to do:</b> re-record or re-import the clip with the camera square to the
+runner — side-on (the belt runs across the frame) for sagittal analysis, front or rear
+for frontal analysis — then start a new session with that plane. If the footage is
+correct and only the label is wrong, reprocess it with the correct plane. The form
+score, risk level, joint-angle table and gait metrics are withheld until the plane is
+verified; do not use this report clinically.</p>
+</div>"""
+    plane_warn = plane_block
+
+    # ---- scoreable sections (blanked by the gate) ------------------------
+    risk_section = f"""<h2>Injury risk screening — {esc(risk.get("level"))} ({esc(risk.get("points"))} pts)</h2>
+{"<ul>" + risk_flags + "</ul>" if risk_flags else '<p class="muted">No risk flags were triggered by the measured metrics.</p>'}
+<p class="muted">Automated drill suggestions are intentionally not shown in the clinical report. The clinician-authored plan below is the recommendation; screening flags are observations, not a prescription.</p>
+<p class="caveat">{esc(risk.get("caveat") or advisor.EVIDENCE_CAVEAT)} This section is rule-based, not AI and not a clinician-authored plan; a licensed clinician must review it.</p>"""
+    joint_section = f"""<h2>Joint angles</h2>
+<p class="muted" style="font-size:12px;max-width:880px">Included joint angle:
+180° means the segment is straight. These are frame means over the whole clip, not peak
+flexion/extension or a clinical ROM measurement. A low <b>Tracked</b> percentage means the
+landmark was rarely visible; do not interpret that joint.</p>
+<table><tr><th>Joint</th><th>Mean</th><th>Min</th><th>Max</th><th>ROM</th><th>Angular vel.</th><th>Tracked</th></tr>
+{joint_rows or '<tr><td colspan="7">No joint data was tracked.</td></tr>'}</table>
+{joint_ref}"""
+    sym_section = f"""<h2>Left / right symmetry (mean angle agreement) and asymmetry index</h2>
+<table><tr><th>Joint</th><th>Symmetry</th></tr>{sym_rows or '<tr><td colspan="2">—</td></tr>'}</table>
+<table><tr><th>Asymmetry (spec formula)</th><th>Value</th></tr>{asym_rows or '<tr><td colspan="2">—</td></tr>'}</table>"""
+    form_section = f"""<h2>Form metrics vs reference bands ({esc(plane)} view)</h2>
+<table><tr><th>Metric</th><th>Value</th><th>Reference band</th><th>Status</th></tr>
+{form_rows or '<tr><td colspan="4">—</td></tr>'}</table>"""
+    score_section = f"""<h2>Overall form score (0-100)</h2>
+<div class="scorebox">
+  <div class="scoreval">{_fmt(summary.get("form_score"), "")}</div>
+  <div><div><b>{"Cycling position score" if discipline == "cycling" else "Composite form score"}</b> — weighted across symmetry, cadence, overstride,
+   joint angles and oscillation for the <b>{esc(plane)}</b> view plane.</div>
+  <div class="muted">Method: {esc(fs.get("method") or "weighted composite")} · coverage
+   {esc(fs.get("coverage"))}.</div></div>
+</div>
+<table><tr><th>Component</th><th>Value</th><th>Reference band</th><th>Score</th><th>Weight</th></tr>
+{score_rows or '<tr><td colspan="5">—</td></tr>'}</table>"""
+    clinical_block = clinical_section
+    if blocked:
+        risk_section = joint_section = sym_section = form_section = score_section = ""
+        phases_section = ""
+        captures_section = ""
+        joint_study_section = ""
+        clinical_block = (
+            '<p class="muted">Clinical screening and rationale are withheld while the '
+            'camera plane is unverified — see the blocking notice above. Re-record with '
+            'the correct plane before drafting or signing clinical material.</p>')
+    if blocked:
+        # A score/risk card beside a blocking notice reads as a score.
+        cards = [c for c in cards
+                 if c[0] not in ("Form score", "Risk level", "Metrics in band")]
+    card_html = "".join(
+        f'<div class="card"><div class="k">{esc(k)}</div><div class="v">{v}</div></div>'
+        for k, v in cards)
     disc_meta = (" · discipline: <b>cycling</b> · bike: <b>"
                  + esc(config.BIKE_LABELS.get(bike_type, bike_type)) + "</b>"
                  if discipline == "cycling" else "")
@@ -1173,11 +1256,17 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
  .drill {{ background:#132018; border:1px solid #24512f; border-radius:8px; padding:10px 12px; margin-top:8px; }}
  .drill ul {{ margin:6px 0 0 18px; }}
  .caveat {{ color:#fbbf24; font-size:12px; margin-top:8px; max-width:880px; }}
+ .blockbox {{ background:#2a1416; border:1px solid #7f1d1d; border-left:6px solid #ef4444;
+              border-radius:8px; padding:14px 16px; margin:14px 0; max-width:880px; }}
+ .blockbox h2 {{ color:#fca5a5; margin:0 0 8px; font-size:17px; }}
+ .blockbox p {{ font-size:13px; line-height:1.5; margin:8px 0 0; }}
  @page {{ size: A4 portrait; margin: 12mm; }}
  @media print {{
    body {{ background:#fff; color:#111; padding:0; font-size:11.5px; }}
    h1 {{ font-size:17px; }} h2 {{ font-size:13px; color:#0b4a75; page-break-after:avoid; }}
    .muted, .disc, .caveat {{ color:#555; }}
+   .blockbox {{ background:#fdeaea; border:1px solid #b3261e; border-left:6px solid #b3261e; }}
+   .blockbox h2 {{ color:#b3261e; }}
    .noprint {{ display:none !important; }}
    .card, table, .scorebox, .drill, .kf, .coach {{ page-break-inside:avoid; }}
    .kfgrid {{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }}
@@ -1202,11 +1291,8 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
 <div class="cards">{card_html}</div>
 
 <h2 class="group">{esc(clinical_title)}</h2>
-<h2>Injury risk screening — {esc(risk.get("level"))} ({esc(risk.get("points"))} pts)</h2>
-{"<ul>" + risk_flags + "</ul>" if risk_flags else '<p class="muted">No risk flags were triggered by the measured metrics.</p>'}
-<p class="muted">Automated drill suggestions are intentionally not shown in the clinical report. The clinician-authored plan below is the recommendation; screening flags are observations, not a prescription.</p>
-<p class="caveat">{esc(risk.get("caveat") or advisor.EVIDENCE_CAVEAT)} This section is rule-based, not AI and not a clinician-authored plan; a licensed clinician must review it.</p>
-{clinical_section}
+{risk_section}
+{clinical_block}
 
 <h2>Gait event keyframes ({len(kfs)})</h2>
 {('<div class="kfgrid">' + kf_html + '</div>') if kf_html else '<p class="muted">' + esc(kf_note) + '</p>'}
@@ -1217,26 +1303,15 @@ sagittal metrics (overstride, shin angle, knee flexion, trunk lean) only from th
 
 {phases_section}
 
-<h2>Joint angles</h2>
-<p class="muted" style="font-size:12px;max-width:880px">Included joint angle:
-180° means the segment is straight. These are frame means over the whole clip, not peak
-flexion/extension or a clinical ROM measurement. A low <b>Tracked</b> percentage means the
-landmark was rarely visible; do not interpret that joint.</p>
-<table><tr><th>Joint</th><th>Mean</th><th>Min</th><th>Max</th><th>ROM</th><th>Angular vel.</th><th>Tracked</th></tr>
-{joint_rows or '<tr><td colspan="7">No joint data was tracked.</td></tr>'}</table>
-{joint_ref}
+{joint_section}
 
 {captures_section}
 
 {joint_study_section}
 
-<h2>Left / right symmetry (mean angle agreement) and asymmetry index</h2>
-<table><tr><th>Joint</th><th>Symmetry</th></tr>{sym_rows or '<tr><td colspan="2">—</td></tr>'}</table>
-<table><tr><th>Asymmetry (spec formula)</th><th>Value</th></tr>{asym_rows or '<tr><td colspan="2">—</td></tr>'}</table>
+{sym_section}
 
-<h2>Form metrics vs reference bands ({esc(plane)} view)</h2>
-<table><tr><th>Metric</th><th>Value</th><th>Reference band</th><th>Status</th></tr>
-{form_rows or '<tr><td colspan="4">—</td></tr>'}</table>
+{form_section}
 
 {bike_section}
 {rear_section}
@@ -1246,16 +1321,7 @@ landmark was rarely visible; do not interpret that joint.</p>
 {aero_section}
 
 <h2 class="group">{esc(coach_title)}</h2>
-<h2>Overall form score (0-100)</h2>
-<div class="scorebox">
-  <div class="scoreval">{_fmt(summary.get("form_score"), "")}</div>
-  <div><div><b>{"Cycling position score" if discipline == "cycling" else "Composite form score"}</b> — weighted across symmetry, cadence, overstride,
-   joint angles and oscillation for the <b>{esc(plane)}</b> view plane.</div>
-  <div class="muted">Method: {esc(fs.get("method") or "weighted composite")} · coverage
-   {esc(fs.get("coverage"))}.</div></div>
-</div>
-<table><tr><th>Component</th><th>Value</th><th>Reference band</th><th>Score</th><th>Weight</th></tr>
-{score_rows or '<tr><td colspan="5">—</td></tr>'}</table>
+{score_section}
 
 <h2>Charts</h2>
 {chart_imgs or '<p class="muted">No charts (no data).</p>'}

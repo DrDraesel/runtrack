@@ -22,3 +22,7 @@ desktop.ini
 
 # graphify knowledge graph artifacts
 graphify-out/
+
+# UI verification grabs (regenerate with tools/ui_check.py)
+verification/*.jpg
+verification/*.png

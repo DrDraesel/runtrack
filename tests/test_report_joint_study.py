@@ -28,6 +28,14 @@ def base_summary(**over):
         "discipline": "running",
         "view_plane": "sagittal",
         "duration_s": 12.0,
+        # a verified side view: the plane gate (tests/test_plane_gate.py) blanks
+        # the angle/score sections for an unverified plane, and these tests are
+        # about the captured-angle/joint-study sections being present.
+        "data_quality": {"lower_body_coverage_pct": 88.0, "lower_body_ok": True,
+                         "camera_orientation": {
+                             "guess": "sagittal", "guess_label": "sagittal (side)",
+                             "nose_offset_ratio": 1.42, "samples": 240,
+                             "plane_match": True}},
         "form_score": 76.0,
         "form_score_detail": {"method": "weighted composite", "coverage": 0.6,
                               "components": [], "weights": {}},

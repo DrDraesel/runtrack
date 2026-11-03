@@ -196,6 +196,48 @@ class Store:
                 (duration_s, frames, status, json.dumps(summary, default=str),
                  str(self.sessions_dir / str(sid)), sid))
 
+    def reconcile_orphans(self, note: str | None = None) -> list:
+        """Close sessions left ``running`` by a previous process.
+
+        A capture loop that died (crash, power loss, killed app) used to leave
+        its row ``running`` forever, so the UI showed a session that never ends
+        and the report was never built.  Startup reconciliation closes those
+        rows as ``incomplete`` and records why in the stored summary.  Returns
+        the ids it closed.
+        """
+        note = note or ("session closed at startup: the app stopped before this "
+                        "recording was finalized, so it is incomplete")
+        closed: list = []
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, summary_json FROM sessions WHERE status='running'"
+            ).fetchall()
+            for row in rows:
+                sid = int(row["id"])
+                try:
+                    sm = json.loads(row["summary_json"]) if row["summary_json"] else {}
+                except Exception:
+                    sm = {}
+                if not isinstance(sm, dict):
+                    sm = {}
+                prev = sm.get("note")
+                sm["note"] = f"{prev} {note}" if prev else note
+                labels = sm.get("labels")
+                if not isinstance(labels, list):
+                    labels = sm["labels"] = []
+                labels.append(note)
+                dq = sm.get("data_quality")
+                if not isinstance(dq, dict):
+                    dq = sm["data_quality"] = {}
+                dq["orphaned_running"] = True
+                c.execute(
+                    "UPDATE sessions SET status='incomplete', "
+                    "ended_ts=COALESCE(ended_ts, datetime('now')), summary_json=? "
+                    "WHERE id=? AND status='running'",
+                    (json.dumps(sm, default=str), sid))
+                closed.append(sid)
+        return closed
+
     def save_csv(self, sid: int, rows: list) -> Path:
         p = self.sessions_dir / str(sid) / "metrics.csv"
         keys: list = []
