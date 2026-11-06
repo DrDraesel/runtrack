@@ -26,3 +26,6 @@ graphify-out/
 # UI verification grabs (regenerate with tools/ui_check.py)
 verification/*.jpg
 verification/*.png
+
+# generated verification artifacts (18 MB session PDFs)
+verification/session-*.pdf
